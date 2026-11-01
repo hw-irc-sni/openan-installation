@@ -9,7 +9,7 @@ metadata:
     oda.tmforum.org/operatorId: {{ .Values.tmf.operatorId | quote }}
     {{- end }}
     {{- if .Values.tmf.operatorName }}
-    oda.tmforum.org/operatorName: {{ .Values.tmf.operatorName | quote }}
+    oda.tmforum.org/operatorName: {{ .Values.tmf.operatorName | replace " " "-" | trunc 63 | trimAll "-_." | quote }}
     {{- end }}
 spec:
   replicas: {{ .Values.deployment.replicas }}

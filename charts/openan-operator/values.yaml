@@ -22,8 +22,8 @@ deployment:
 
 # Optional TM Forum operator identity, shown as a badge on the portal.
 tmf:
-  operatorId: ""        # e.g. TMFOP0xx
-  operatorName: ""      # e.g. OpenAN Operator
+  operatorId: "TMFOP000"        # e.g. TMFOP0xx
+  operatorName: "OpenAN Operator"      # e.g. OpenAN Operator
 
 # Environment variables for the operator (rendered into a ConfigMap)
 configmap:
