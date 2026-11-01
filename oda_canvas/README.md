@@ -48,6 +48,17 @@ conformance APIs). Settings are in `config.mk`; passwords and secrets (portal us
 e.g. `make up PORTAL_BUILD=false` to pull
 `tmforumodacanvas/canvas-portal:{frontend,backend}-0.1.0` instead of building the images from `PORTAL_SRC` (the default, as those tags were not found on Docker Hub).
 
+## Checking component metrics in Prometheus
+
+After `make component-sample` (release `pc`) the Canvas creates a `ServiceMonitor`, and Prometheus lists the target
+`pc-productcatalogmanagement-sm` as `up`. The Product Catalog counter is named after the release:
+**`pc_productcatalogmanagement_api_counter`** (label `NotificationEvent`). The Canvas tutorial calls it
+`product_catalog_api_counter`, which returns nothing here. The series appears only after the API handles events;
+for example, with `kubectl -n components port-forward svc/pc-prodcatapi 18080:8080`, POST/PATCH/DELETE under
+`http://localhost:18080/pc-productcatalogmanagement/tmf-api/productCatalogManagement/v4/category`. Then query
+`sum by (NotificationEvent) (pc_productcatalogmanagement_api_counter)` (`make observability-forward`, Prometheus on
+`localhost:$(PROMETHEUS_LOCAL_PORT)`).
+
 ## Design notes
 
 - Portal Services are `ClusterIP` (the chart has no nodePort setting), so access is by `port-forward`.
