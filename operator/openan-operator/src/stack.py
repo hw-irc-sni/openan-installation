@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 COMPONENTS = ("registryCenter", "orchestrationCenter", "frontend")
 CHART_DIR = {"registryCenter": "openan-registry-center", "orchestrationCenter": "openan-orchestration-center",
              "frontend": "openan-frontend"}
+PINNED = {"registryCenter": ("runtimeSecret", "credentialSecret", "trust"), "orchestrationCenter": ("runtimeSecret",)}
 SUFFIX = {"registryCenter": "registry-center", "orchestrationCenter": "orchestration-center", "frontend": "frontend"}
 
 
@@ -49,7 +50,15 @@ def chart_values(cr_name: str, spec: Dict[str, Any], comp: str) -> Dict[str, Any
     else:
         gen = {"backendUrl": f"http://{oc_rel}-orchestration-center:5001",
                "registryUrl": f"http://{rc_rel}-registry-center:5000"}
-    return _merge(gen, spec.get(comp, {}).get("values", {}))
+    out = _merge(gen, spec.get(comp, {}).get("values", {}))
+    # A CR author must not redirect the operator's credentials: Secret references and the trust store are
+    # always the generated ones (the pod is created with the operator's, not the author's, permissions).
+    for key in PINNED.get(comp, ()):
+        if key in gen:
+            out[key] = gen[key]
+        else:
+            out.pop(key, None)
+    return out
 
 
 def enabled_components(spec: Dict[str, Any]) -> List[str]:
