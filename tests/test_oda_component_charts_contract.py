@@ -108,3 +108,18 @@ def test_operator_writes_are_namespaced_not_cluster_wide():
         assert need in seen, need
     binding = next(d for d in docs if d["kind"] == "RoleBinding")
     assert binding["metadata"]["namespace"] == "components" and binding["subjects"][0]["namespace"] == "canvas"
+
+
+@pytest.mark.parametrize("chart,section", [("openan-registry-center", "registry"), ("openan-orchestration-center", "orchestration")])
+def test_extra_env_keys_are_quoted_in_the_configmap(chart, section, tmp_path):
+    """A hostile key must stay one literal ConfigMap key and never inject YAML (defense in depth)."""
+    if not HELM:
+        pytest.skip("helm not on PATH")
+    values = tmp_path / "v.yaml"
+    values.write_text(yaml.safe_dump({section: {"extraEnv": {"EVIL: injected\nOTHER": "v"}}}))
+    cmd = [HELM, "template", "rel", str(ROOT / "charts" / chart), "-n", "components", "-f", str(values)]
+    for k, v in CHARTS[chart].items():
+        cmd += ["--set", f"{k}={v}"]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    cm = next(d for d in yaml.safe_load_all(out) if d and d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-config"))
+    assert cm["data"]["EVIL: injected\nOTHER"] == "v" and "OTHER" not in cm["data"]
