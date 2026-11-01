@@ -19,6 +19,25 @@ EXTRA_ENV = {"registryCenter": ("registry", "extraEnv"), "orchestrationCenter": 
 FORBIDDEN_ENV = {"AGENT_REGISTRY_URL", "REGISTRY_ACCESS_TOKEN", "ORCH_ACCESS_PASSWORD", "OC_ADMIN_INITIAL_PASSWORD",
                  "ORCH_EXTERNAL_AUTH_MODE", "REGISTRY_INTEGRATION_AUTH_MODE", "REGISTRY_OWNER_IDENTITY_MODE",
                  "REGISTRY_SIGNATURE_VALIDATION_ENABLED", "INTEGRATION_TOKEN_HMAC_KEY", "INTEGRATION_FINGERPRINT_KEY"}
+# Keys the chart ConfigMap generates itself (kept in sync with the templates by a contract test). The template
+# merges them last, so an extraEnv entry can never change them; they are also rejected here, to fail early.
+GENERATED_ENV = {
+    "registryCenter": frozenset({
+        "REGISTRY_IP", "REGISTRY_PORT", "REGISTRY_ENABLE_HTTPS", "REGISTRY_VERIFY_CLIENT", "REGISTRY_FORWARDED_ALLOW_IPS",
+        "REGISTRY_STARTUP_STRICT_IDENTITY", "REGISTRY_OWNER_IDENTITY_MODE", "REGISTRY_INTEGRATION_AUTH_MODE",
+        "REGISTRY_REGISTRY_PUBLIC_BASE_URL", "REGISTRY_REGISTRY_SIGN_ENABLED", "REGISTRY_SIGNATURE_VALIDATION_ENABLED",
+        "PERSISTENCE_MODE", "LLM_CONFIG_FILE"}),
+    "orchestrationCenter": frozenset({
+        "ORCH_IP", "ORCH_PORT", "ORCH_ENABLE_HTTPS", "ORCH_VERIFY_CLIENT", "ORCH_FORWARDED_ALLOW_IPS",
+        "ORCH_EXTERNAL_AUTH_MODE", "ORCH_PUBLIC_SCHEME", "AGENT_REGISTRY_URL", "PERSISTENCE_MODE", "LLM_CONFIG_FILE"}),
+}
+# Process-level variables that change how the interpreter loads code, where traffic goes or what TLS trusts.
+FORBIDDEN_PREFIXES = ("PYTHON", "LD_", "DYLD_", "SSL_", "REQUESTS_", "CURL_", "HTTP_", "HTTPS_", "ALL_PROXY", "NO_PROXY",
+                      "KUBERNETES_", "HELM_", "KUBECONFIG")
+# Any name that talks about authentication, secrets, trust, transport or storage is operator territory.
+SECURITY_WORDS = ("AUTH", "TOKEN", "PASSWORD", "PASSWD", "SECRET", "CRED", "IDENTITY", "SIGN", "KEY", "CERT", "TLS", "SSL",
+                  "HTTPS", "VERIFY", "OWNER", "TRUST", "URL", "URI", "HOST", "ENDPOINT", "PROXY", "ALLOWLIST", "PERSISTENCE",
+                  "DB_", "DATABASE", "CIPHER", "ADMIN", "ISOLATION")
 DEFAULT_IMAGE_PREFIXES = ("ghcr.io/project-openan/",)
 
 
@@ -46,9 +65,10 @@ def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_
         malformed = sorted(str(k) for k in env if not isinstance(k, str) or not ENV_KEY.match(k))
         if malformed:
             raise ValuesError(f"{comp}: {section}.{key} has invalid variable names {malformed} (use [A-Z_][A-Z0-9_]*)")
-        bad = sorted(k for k in env if k in FORBIDDEN_ENV)
+        bad = sorted(k for k in env if k in FORBIDDEN_ENV or k in GENERATED_ENV.get(comp, ())
+                     or k.startswith(FORBIDDEN_PREFIXES) or any(w in k for w in SECURITY_WORDS))
         if bad:
-            raise ValuesError(f"{comp}: {section}.{key} may not set {bad}")
+            raise ValuesError(f"{comp}: {section}.{key} may not set {bad} (generated, security-relevant or process-level)")
         nonscalar = sorted(k for k, v in env.items() if not isinstance(v, (str, int, float, bool)))
         if nonscalar:
             raise ValuesError(f"{comp}: {section}.{key} values must be strings, numbers or booleans: {nonscalar}")

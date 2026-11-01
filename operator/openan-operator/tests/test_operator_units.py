@@ -346,3 +346,21 @@ def test_extra_env_names_and_values_are_strict(env):
 def test_extra_env_accepts_plain_variables():
     stack.validate_values("orchestrationCenter", {"orchestration": {"extraEnv": {"LOG_LEVEL": "debug", "WORKERS": 4, "FLAG": True}}})
     stack.validate_values("registryCenter", {"registry": {"extraEnv": {"REGISTRY_LOG_LEVEL": "debug"}}})
+
+
+@pytest.mark.parametrize("name", ["PYTHONPATH", "PYTHONSTARTUP", "LD_PRELOAD", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+                                  "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "REGISTRY_ENABLE_HTTPS", "REGISTRY_VERIFY_CLIENT",
+                                  "ORCH_ENABLE_HTTPS", "PERSISTENCE_MODE", "DB_HOST", "DB_PASSWORD", "LLM_CONFIG_FILE",
+                                  "REGISTRY_REGISTRY_SIGN_ENABLED", "REGISTRY_OWNER_ISOLATION_ENABLED", "REGISTRY_JWK_ALLOWLIST",
+                                  "INTEGRATION_TOKEN_HMAC_KEY", "REGISTRY_CIPHER_KEY", "REGISTRY_PUBLIC_BASE_URL",
+                                  "ORCH_API_TOKEN", "KUBERNETES_SERVICE_HOST", "HELM_DRIVER", "AGENT_REGISTRY_URL"])
+def test_extra_env_rejects_security_and_process_variables(name):
+    for comp, section, key in (("registryCenter", "registry", "extraEnv"), ("orchestrationCenter", "orchestration", "extraEnv")):
+        with pytest.raises(stack.ValuesError):
+            stack.validate_values(comp, {section: {key: {name: "x"}}})
+
+
+@pytest.mark.parametrize("name", ["LOG_LEVEL", "WORKERS", "REGISTRY_LOG_LEVEL", "ORCH_LOG_LEVEL", "TZ", "RETRIEVAL_VECTOR_TOP_K"])
+def test_extra_env_still_allows_tuning_variables(name):
+    stack.validate_values("registryCenter", {"registry": {"extraEnv": {name: "1"}}})
+    stack.validate_values("orchestrationCenter", {"orchestration": {"extraEnv": {name: "1"}}})
