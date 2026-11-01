@@ -1,0 +1,81 @@
+# Minimal A2A agent component: nginx serving an agent card. The OpenAN operator discovers the
+# a2a ExposedAPI and publishes the card in the Registry Center.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-agent-card
+  namespace: components
+  labels: {oda.tmforum.org/componentName: sample-agent-sampleagent}
+data:
+  agent-card.json: |
+    {"name":"Sample Weather Agent","description":"Demo A2A agent exposed by an ODA component",
+     "version":"1.0.0","url":"http://sample-agent.components.svc.cluster.local:8080/a2a",
+     "capabilities":{"streaming":false},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],
+     "skills":[{"id":"weather","name":"Weather","description":"Reports the weather","tags":["demo"]}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-agent
+  namespace: components
+  labels: {oda.tmforum.org/componentName: sample-agent-sampleagent}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sample-agent}}
+  template:
+    metadata:
+      labels: {app: sample-agent, oda.tmforum.org/componentName: sample-agent-sampleagent}
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          mkdir -p /srv/.well-known && cp /card/agent-card.json /srv/.well-known/agent-card.json
+          printf 'server { listen 8080; root /srv; location / { default_type application/json; try_files $uri =404; } }' > /etc/nginx/conf.d/default.conf
+          exec nginx -g 'daemon off;'
+        ports: [{containerPort: 8080}]
+        volumeMounts: [{name: card, mountPath: /card}]
+      volumes: [{name: card, configMap: {name: sample-agent-card}}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-agent
+  namespace: components
+  labels: {oda.tmforum.org/componentName: sample-agent-sampleagent}
+spec:
+  selector: {app: sample-agent}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: oda.tmforum.org/v1
+kind: Component
+metadata:
+  name: sample-agent-sampleagent
+  namespace: components
+  labels: {oda.tmforum.org/componentName: sample-agent-sampleagent}
+spec:
+  componentMetadata:
+    id: SAMPLE-AGENT
+    name: sampleagent
+    functionalBlock: AIAgent
+    publicationDate: "2026-11-01T00:00:00.000Z"
+    status: specified
+    version: 1.0.0
+    description: "Sample A2A agent component for the OpenAN operator demo."
+    maintainers: [{name: OpenAN, email: openan@example.invalid}]
+    owners: [{name: OpenAN, email: openan@example.invalid}]
+  coreFunction:
+    exposedAPIs:
+    - name: weatheragent
+      apiType: a2a
+      specification:
+      - url: http://sample-agent.components.svc.cluster.local:8080/.well-known/agent-card.json
+      implementation: sample-agent
+      path: /sample-agent-sampleagent/a2a
+      port: 8080
+    dependentAPIs: []
+  eventNotification: {publishedEvents: [], subscribedEvents: []}
+  managementFunction: {exposedAPIs: []}
+  securityFunction: {canvasSystemRole: canvasRole, exposedAPIs: []}

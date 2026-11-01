@@ -17,13 +17,22 @@ jobs:
       - uses: azure/setup-helm@v4.3.0
         with:
           version: v3.19.0
-      - run: pip install pytest pyyaml cryptography
+      - run: pip install pytest pyyaml cryptography kopf kubernetes httpx prometheus-client bcrypt
       - run: python -m pytest tests/ -q
+      - name: OpenAN operator unit tests
+        run: python -m pytest operator/openan-operator/tests -q
+      - name: Operator and component charts
+        run: |
+          helm lint charts/openan-operator
+          helm lint charts/openan-registry-center --set image.tag=ci --set runtimeSecret=a --set credentialSecret=b
+          helm lint charts/openan-orchestration-center --set image.tag=ci --set runtimeSecret=a --set registryUrl=http://rc:5000
+          helm lint charts/openan-frontend --set image.tag=ci --set backendUrl=http://oc:5001 --set registryUrl=http://rc:5000
       - name: Shell syntax
         run: |
           bash -n containerized/online-install/install.sh
           bash -n containerized/build/build.sh
           bash -n containerized/build/portal/build-portal-image.sh
+          bash -n containerized/build/build-operator.sh
           find containerized/offline-install-compose -name '*.sh' -exec bash -n {} \;
   offline-compose-container:
     runs-on: ubuntu-latest

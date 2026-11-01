@@ -1,0 +1,45 @@
+# ODA Component identity (Component name is <release>-<component.name>).
+component:
+  id: OPENAN-RC
+  name: registrycenter
+  functionalBlock: AIAgentRegistry
+  publicationDate: "2026-11-01T00:00:00.000Z"
+  version: 0.1.0
+  apipolicy:
+    apiKeyVerification: {enabled: false, location: header}
+    rateLimit: {enabled: false, identifier: IP, limit: "6", interval: pm}
+    quota: {identifier: "", limit: ""}
+    OASValidation: {requestEnabled: false, responseEnabled: false, allowUnspecifiedHeaders: false, allowUnspecifiedQueryParams: false, allowUnspecifiedCookies: false}
+    CORS: {enabled: false, allowCredentials: false, allowOrigins: "", handlePreflightRequests: {enabled: false, allowHeaders: "Accept, Content-Type", allowMethods: "GET, POST", maxAge: 36000}}
+    template: ""
+security:
+  canvasSystemRole: canvasRole
+
+image:
+  repository: ghcr.io/project-openan/registry-center
+  tag: ""   # REQUIRED: no usable default (see containerized/TRANSPORT_DEPLOYMENT.md)
+  pullPolicy: IfNotPresent
+port: 5000
+specPort: 8081   # nginx sidecar serving the hand-authored OpenAPI document
+replicas: 1   # RC events/schedulers are process-local: keep 1
+
+# Secrets are created by the OpenAN operator (or by hand) and only referenced here.
+runtimeSecret: ""      # env INTEGRATION_TOKEN_HMAC_KEY / INTEGRATION_FINGERPRINT_KEY (required)
+credentialSecret: ""   # key integration_credentials.conf (required, static_bearer tokens)
+
+registry:
+  identityMode: token
+  authMode: static_bearer
+  publicBaseUrl: ""
+  signatureValidation: true
+  extraEnv: {}           # non-secret REGISTRY_* settings (e.g. trusted key allowlist)
+  modelsYaml: ""         # optional complete models.yaml content; empty -> empty models map
+persistence:
+  size: 5Gi
+  storageClassName: ""
+resources: {}
+# Must match the image's user (source builds use 10001; older published images run as 1000).
+podSecurityContext: {runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001}
+# Local verification keys for signed agent cards (alternative to an HTTPS jku + allow-list):
+# the named ConfigMap holds <agent>.json = {"keys": [JWK]} and is mounted under .../jwks/<organization>.
+trust: {organization: "", configMap: ""}
