@@ -1,0 +1,34 @@
+component:
+  id: OPENAN-OC
+  name: orchestrationcenter
+  functionalBlock: AIAgentOrchestration
+  publicationDate: "2026-11-01T00:00:00.000Z"
+  version: 0.1.0
+  apipolicy:
+    apiKeyVerification: {enabled: false, location: header}
+    rateLimit: {enabled: false, identifier: IP, limit: "6", interval: pm}
+    quota: {identifier: "", limit: ""}
+    OASValidation: {requestEnabled: false, responseEnabled: false, allowUnspecifiedHeaders: false, allowUnspecifiedQueryParams: false, allowUnspecifiedCookies: false}
+    CORS: {enabled: false, allowCredentials: false, allowOrigins: "", handlePreflightRequests: {enabled: false, allowHeaders: "Accept, Content-Type", allowMethods: "GET, POST", maxAge: 36000}}
+    template: ""
+security:
+  canvasSystemRole: canvasRole
+image:
+  repository: ghcr.io/project-openan/orchestration-center
+  tag: ""   # REQUIRED
+  pullPolicy: IfNotPresent
+port: 5001
+specPort: 8081
+replicas: 1   # single replica until shared sessions exist
+runtimeSecret: ""   # env: OC_ADMIN_INITIAL_PASSWORD / REGISTRY_ACCESS_TOKEN / ... (required)
+registryUrl: ""     # e.g. http://<release>-registry-center:5000 (required)
+orchestration:
+  persistenceMode: file   # file | postgresql | mysql (SQL needs DB_* in extraEnv + runtimeSecret)
+  extraEnv: {}
+  modelsYaml: ""
+persistence:
+  size: 5Gi
+  storageClassName: ""
+resources: {}
+# Must match the image's user (source builds use 10001; older published images run as 1000).
+podSecurityContext: {runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001}

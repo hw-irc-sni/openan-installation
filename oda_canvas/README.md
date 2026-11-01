@@ -91,3 +91,19 @@ Symptom: `failed to fetch anonymous token ... dial tcp ...:443: connect: no rout
    images. Canvas images (incl. `bitnamilegacy/*`) are pulled by `scripts/preload-images.sh`.
 
 The kind node pulls nothing from the internet: every image is `kind load`ed.
+
+## OpenAN operator (optional)
+
+An external kopf operator (`operator/openan-operator`, chart `charts/openan-operator`) manages OpenAN as ODA
+Components and publishes Canvas `a2a` ExposedAPIs as Agent Cards in the Registry Center. See
+`operator/openan-operator/README.md` for the design. It is not part of `make up`:
+
+```bash
+make openan-operator-image   # build the operator image, pull RC/OC images, kind load them
+make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orchestration Center)
+make openan-sample           # sample a2a Component; waits until its card is in the Registry
+```
+
+Demo limits: card signing is off (the Registry only fetches keys over HTTPS from an allow-listed host); the
+frontend is disabled (no published `openan-portal` image); RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
+(`values.podSecurityContext`).

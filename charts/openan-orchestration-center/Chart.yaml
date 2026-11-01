@@ -1,0 +1,7 @@
+apiVersion: v2
+name: openan-orchestration-center
+description: OpenAN Orchestration Center packaged as an ODA Component (workflow generation and execution)
+type: application
+version: 0.1.0
+# version: 0.1.0 - Initial ODA Component packaging of the Orchestration Center
+appVersion: "v1"

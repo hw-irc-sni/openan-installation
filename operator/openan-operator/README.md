@@ -1,0 +1,82 @@
+# OpenAN Operator
+
+A Python/[kopf](https://kopf.readthedocs.io) operator for the [ODA Canvas](https://github.com/tmforum-oda/oda-canvas).
+It lives outside the Canvas repository and has two jobs:
+
+1. **Stack lifecycle** – an `OpenAN` custom resource (`openans.openan.dev/v1alpha1`) installs, upgrades and
+   uninstalls the Registry Center, Orchestration Center and frontend. Each is an **ODA Component** with its own
+   Helm chart (`charts/openan-registry-center`, `charts/openan-orchestration-center`, `charts/openan-frontend`)
+   bundled in the operator image under `/charts`. The operator runs `helm upgrade --install` in order
+   (RC → OC → frontend), gating each step on the Canvas reporting the Component `Complete`.
+2. **Agent Card sync** – every Canvas `ExposedAPI` with `apiType: a2a` is fetched from the component's
+   `/.well-known/agent-card.json`, mapped to the Registry Center schema, (optionally) signed with ES256 and
+   upserted into the Registry Center. Deleting the ExposedAPI deletes the card.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant K as Kubernetes API
+    participant O as OpenAN operator
+    participant H as Helm
+    participant C as Canvas component operator
+    U->>K: apply OpenAN CR
+    K-->>O: create/update event
+    O->>K: create Secrets once (HMAC keys, token, signing key)
+    loop RC, OC, frontend
+        O->>H: helm upgrade --install (Component chart)
+        H->>K: Component + Deployment + Service
+        C->>K: ExposedAPI, status Complete
+        O->>K: read Component status
+    end
+    O->>K: patch OpenAN status conditions
+```
+
+```mermaid
+sequenceDiagram
+    participant K as Kubernetes API
+    participant O as OpenAN operator
+    participant A as A2A agent component
+    participant R as Registry Center
+    K-->>O: ExposedAPI (apiType a2a) event or 5 min timer
+    O->>A: GET /.well-known/agent-card.json (in-cluster Service)
+    O->>O: map to registry schema, sign (optional)
+    O->>R: GET card, then POST or PUT with Bearer token
+    O->>K: annotate ExposedAPI openan.dev/registered-card
+    K-->>O: ExposedAPI deleted
+    O->>R: DELETE card
+```
+
+## Layout
+
+| Path | Purpose |
+|---|---|
+| `src/openan_operator.py` | kopf handlers |
+| `src/stack.py`, `helm_driver.py`, `secrets_bootstrap.py` | lifecycle: values, Helm, Secrets (created once, never rotated) |
+| `src/cards.py`, `card_mapper.py`, `card_signer.py`, `registry_client.py` | card sync |
+| `crd/openan-crd.yaml` | CRD (copy kept in `charts/openan-operator/crds/`, checked by a contract test) |
+| `Dockerfile` | build with `containerized/build/build-operator.sh` (context = repo root) |
+
+## Operating notes and limits
+
+- **Secrets** `<cr>-registry-runtime`, `-registry-credentials`, `-operator-token`, `-orchestration-runtime`,
+  `-signing-key` are generated on first reconcile and are owned by the CR. The operator token is a
+  `vendor_agent` Bearer token for the Registry Center (owner isolation: one stable identity).
+- **Image tags** have no default: `spec.<component>.values.image.tag` is required.
+- **Signing**: the Registry Center only accepts signed cards and fetches verification keys over HTTPS from an
+  allow-listed `jku` host. In-cluster HTTP does not satisfy this, so the kind demo sets
+  `spec.cardSync.signing.enabled: false`, which also disables signature validation in the Registry Center.
+  Production needs an HTTPS JWKS endpoint (`spec.cardSync.signing.jku`) and `REGISTRY_JWK_ALLOWLIST`.
+- Only `a2a` ExposedAPIs are synced; the Registry Center has no MCP concept.
+- The frontend component is optional (`spec.frontend.enabled`); the portal image has no published tag.
+- Image user: published images differ (1000 vs 10001); override `values.podSecurityContext` per component.
+- Helm runs inside the operator (Helm 3). `helm uninstall` keeps the data PVCs on purpose.
+
+## Develop
+
+```bash
+pip install -r operator/openan-operator/requirements.txt pytest
+python -m pytest operator/openan-operator/tests -q
+bash containerized/build/build-operator.sh --tag 0.1.0
+```
+
+Kind demo: `make -C oda_canvas openan-operator-image openan-operator openan-sample`.

@@ -1,0 +1,63 @@
+{{/* Copyright (c) 2026 Huawei Technologies Co., Ltd. All Rights Reserved. SPDX-License-Identifier: Apache-2.0 */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "oc.fullname" . }}
+  labels: {{- include "oc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app: {{ include "oc.fullname" . }}
+  template:
+    metadata:
+      labels: {{- include "oc.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+      - name: prepare-runtime
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["python", "-c", "from pathlib import Path; [Path('/runtime', p).mkdir(mode=0o770, exist_ok=True) for p in ('data', 'log')]"]
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        volumeMounts:
+        - {name: runtime, mountPath: /runtime}
+      containers:
+      - name: orchestration-center
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        ports:
+        - {name: http, containerPort: {{ .Values.port }}}
+        envFrom:
+        - configMapRef: {name: {{ include "oc.fullname" . }}-config}
+        - secretRef: {name: {{ .Values.runtimeSecret }}}
+        readinessProbe: {tcpSocket: {port: http}, initialDelaySeconds: 10, periodSeconds: 10, failureThreshold: 12}  # TCP: image versions differ in their healthcheck module
+        livenessProbe: {tcpSocket: {port: http}, initialDelaySeconds: 40, periodSeconds: 30}
+        resources: {{- toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+        - {name: runtime, mountPath: /opt/orchestration-center/data, subPath: data}
+        - {name: runtime, mountPath: /opt/orchestration-center/log, subPath: log}
+        - {name: models, mountPath: /opt/orchestration-center/etc/config/models.yaml, subPath: models.yaml, readOnly: true}
+      - name: spec
+        # Serves the hand-authored OpenAPI document; reuses the service image (python is always present).
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["python", "-m", "http.server", "{{ .Values.specPort }}", "--directory", "/spec"]
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        ports:
+        - {name: spec, containerPort: {{ .Values.specPort }}}
+        volumeMounts:
+        - {name: openapi, mountPath: /spec, readOnly: true}
+        resources: {requests: {cpu: 5m, memory: 16Mi}}
+      volumes:
+      - name: runtime
+        persistentVolumeClaim: {claimName: {{ include "oc.fullname" . }}-runtime}
+      - name: models
+        configMap: {name: {{ include "oc.fullname" . }}-models}
+      - name: openapi
+        configMap: {name: {{ include "oc.fullname" . }}-openapi}

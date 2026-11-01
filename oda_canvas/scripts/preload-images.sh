@@ -21,7 +21,7 @@ images=$( { grep -hoE '^\s*-?\s*image:\s*"?[^"[:space:]]+' "$out/a.yaml" | sed -
             # Langfuse (manifests/langfuse.yaml): web, worker and its Postgres/ClickHouse/Redis/MinIO
             echo "langfuse/langfuse:$LANGFUSE_IMAGE_TAG"; echo "langfuse/langfuse-worker:$LANGFUSE_IMAGE_TAG"
             echo "$LANGFUSE_POSTGRES_IMAGE"; echo "$LANGFUSE_CLICKHOUSE_IMAGE"
-            echo "$LANGFUSE_REDIS_IMAGE"; echo "$LANGFUSE_MINIO_IMAGE"; } | sort -u | grep -vxE '|auto')
+            echo "$LANGFUSE_REDIS_IMAGE"; echo "$LANGFUSE_MINIO_IMAGE"; } | sort -u | grep -vxE '|auto|\{\{')
 for i in $images; do
   docker image inspect "$i" >/dev/null 2>&1 || docker pull -q "$i" || echo "WARN: could not pull $i"
 done

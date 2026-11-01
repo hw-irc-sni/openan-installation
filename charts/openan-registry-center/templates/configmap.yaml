@@ -1,0 +1,45 @@
+{{/* Copyright (c) 2026 Huawei Technologies Co., Ltd. All Rights Reserved. SPDX-License-Identifier: Apache-2.0 */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rc.fullname" . }}-config
+  labels: {{- include "rc.labels" . | nindent 4 }}
+data:
+  REGISTRY_IP: "0.0.0.0"
+  REGISTRY_PORT: {{ .Values.port | quote }}
+  REGISTRY_ENABLE_HTTPS: "false"
+  REGISTRY_VERIFY_CLIENT: "false"
+  REGISTRY_FORWARDED_ALLOW_IPS: "127.0.0.1"
+  REGISTRY_STARTUP_STRICT_IDENTITY: "true"
+  REGISTRY_OWNER_IDENTITY_MODE: {{ .Values.registry.identityMode | quote }}
+  REGISTRY_INTEGRATION_AUTH_MODE: {{ .Values.registry.authMode | quote }}
+  REGISTRY_REGISTRY_PUBLIC_BASE_URL: {{ .Values.registry.publicBaseUrl | quote }}
+  REGISTRY_REGISTRY_SIGN_ENABLED: "false"
+  REGISTRY_SIGNATURE_VALIDATION_ENABLED: {{ .Values.registry.signatureValidation | quote }}
+  PERSISTENCE_MODE: "file"
+  LLM_CONFIG_FILE: "/opt/registry-center/etc/config/models.yaml"
+  {{- range $k, $v := .Values.registry.extraEnv }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rc.fullname" . }}-models
+  labels: {{- include "rc.labels" . | nindent 4 }}
+data:
+  models.yaml: |
+    {{- if .Values.registry.modelsYaml }}
+    {{- .Values.registry.modelsYaml | nindent 4 }}
+    {{- else }}
+    models: {}
+    {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rc.fullname" . }}-openapi
+  labels: {{- include "rc.labels" . | nindent 4 }}
+data:
+  registry-center.yaml: |
+    {{- .Files.Get "openapi/registry-center.yaml" | nindent 4 }}

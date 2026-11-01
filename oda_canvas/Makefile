@@ -18,7 +18,7 @@ LANGFUSE_VARS := $${OBS_NS} $${LANGFUSE_IMAGE_TAG} $${LANGFUSE_POSTGRES_IMAGE} $
 IMAGES := $(PORTAL_IMAGE_REPO):$(PORTAL_FRONTEND_TAG) $(PORTAL_IMAGE_REPO):$(PORTAL_BACKEND_TAG)
 CANVAS_DEPS := cert-manager-init apisix-gateway kong-gateway canvas-vault pdb-management-operator canvas-oda
 
-.PHONY: up down check cluster images repos canvas-images istio ingress-address gateway-api-crds canvas canvas-verify \
+.PHONY: openan-operator-image openan-operator openan-sample openan-verify up down check cluster images repos canvas-images istio ingress-address gateway-api-crds canvas canvas-verify \
         observability observability-forward portal-realm portal verify component-sample port-forward status
 
 up: check cluster images repos canvas-images istio ingress-address gateway-api-crds canvas observability portal-realm portal verify
@@ -70,12 +70,12 @@ canvas-images:
 	bash scripts/preload-images.sh
 
 istio:
-	helm upgrade --install istio-base istio/base --version $(ISTIO_VERSION) -n istio-system --create-namespace --wait
-	helm upgrade --install istiod istio/istiod --version $(ISTIO_VERSION) -n istio-system --wait
+	helm upgrade --install istio-base istio/base --version $(ISTIO_VERSION) -n istio-system --create-namespace --force-conflicts --wait
+	helm upgrade --install istiod istio/istiod --version $(ISTIO_VERSION) -n istio-system --force-conflicts --wait
 	@kubectl create namespace istio-ingress --dry-run=client -o yaml | kubectl apply -f -
 	@kubectl label namespace istio-ingress istio-injection=enabled --overwrite
 	helm upgrade --install istio-ingress istio/gateway --version $(ISTIO_VERSION) -n istio-ingress \
-	  --set labels.app=istio-ingress --set labels.istio=ingressgateway --skip-schema-validation --wait
+	  --set labels.app=istio-ingress --set labels.istio=ingressgateway --skip-schema-validation --force-conflicts --wait
 
 # kind has no LoadBalancer: give istio-ingress an address so ExposedAPI URLs get populated.
 ingress-address:
@@ -93,7 +93,9 @@ canvas:
 	@for ns in $$(echo $(CANVAS_NAMESPACES) | tr , ' '); do \
 	  kubectl create namespace $$ns --dry-run=client -o yaml | kubectl apply -f -; done
 	kubectl -n $(CANVAS_NS) rollout status statefulset/canvas-keycloak --timeout=15m
-	kubectl -n $(CANVAS_NS) wait --for=condition=available deploy --all --timeout=15m
+	@# Canvas-owned deployments only: the OpenAN operator (installed separately, possibly into this
+	@# namespace) must not gate the Canvas readiness.
+	kubectl -n $(CANVAS_NS) wait --for=condition=available deploy -l 'app.kubernetes.io/name!=openan-operator' --timeout=15m
 	@# The Vault post-install hook can fail once while cert-manager is still issuing canvasvault-tls
 	@# (its Job retries and completes); remove the failed attempt so `kubectl get pods` is clean.
 	@kubectl -n canvas-vault delete pod --field-selector=status.phase=Failed --ignore-not-found
@@ -174,3 +176,46 @@ status:
 down:
 	kind delete cluster --name $(CLUSTER_NAME)
 	rm -rf .rendered
+
+# ---- OpenAN operator -------------------------------------------------------------------------------
+# Not part of `make up`: build/load images first (`make openan-operator-image`), then `make openan-operator`.
+OPENAN_ROOT := $(abspath ..)
+OPENAN_OC_IMAGE := ghcr.io/project-openan/orchestration-center:$(OPENAN_OC_TAG)
+OPENAN_FE_IMAGE := ghcr.io/project-openan/openan-portal:$(OPENAN_FE_TAG)
+OPENAN_IMAGES := ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG) $(OPENAN_OC_IMAGE) $(OPENAN_FE_IMAGE)
+
+openan-operator-image:
+	bash $(OPENAN_ROOT)/containerized/build/build-operator.sh --image $(OPENAN_OPERATOR_IMAGE) --tag $(OPENAN_OPERATOR_TAG)
+	docker image inspect $(OPENAN_OC_IMAGE) >/dev/null 2>&1 || docker build -t $(OPENAN_OC_IMAGE) $(OPENAN_OC_SRC)
+	@# default buildx driver: the docker-container driver does not use the Docker daemon proxy
+	docker image inspect $(OPENAN_FE_IMAGE) >/dev/null 2>&1 || \
+	  (cd $(OPENAN_ROOT)/containerized/build/portal && BUILDER=default PUSH=0 PLATFORMS=linux/amd64 TAG=$(OPENAN_FE_TAG) bash build-portal-image.sh)
+	@docker image inspect ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG) >/dev/null 2>&1 || docker pull ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG)
+	@for i in $(OPENAN_OPERATOR_IMAGE):$(OPENAN_OPERATOR_TAG) $(OPENAN_IMAGES); do \
+	  kind load docker-image $$i --name $(CLUSTER_NAME); done
+
+openan-operator:
+	@# Helm only installs crds/ on first install, so apply the CRD explicitly (idempotent).
+	kubectl apply -f $(OPENAN_ROOT)/operator/openan-operator/crd/openan-crd.yaml
+	helm upgrade --install openan-operator $(OPENAN_ROOT)/charts/openan-operator -n $(OPENAN_OPERATOR_NS) --create-namespace \
+	  --set deployment.image=$(OPENAN_OPERATOR_IMAGE) --set deployment.version=$(OPENAN_OPERATOR_TAG) \
+	  --set deployment.monitoredNamespaces='$(OPENAN_NS)' --wait --timeout 3m
+	@# `kind load` replaces the image under an unchanged tag: restart so the new build is the one running.
+	kubectl -n $(OPENAN_OPERATOR_NS) rollout restart deploy/openan-operator
+	kubectl -n $(OPENAN_OPERATOR_NS) rollout status deploy/openan-operator --timeout=3m
+	@mkdir -p .rendered
+	@envsubst < manifests/openan/openan-cr.yaml.tpl > .rendered/openan-cr.yaml
+	kubectl apply -f .rendered/openan-cr.yaml
+	kubectl -n $(OPENAN_NS) wait --for=condition=Ready openan/openan --timeout=10m
+
+# A sample a2a Component: its Agent Card must show up in the Registry Center.
+openan-sample:
+	kubectl apply -f manifests/openan/sample-a2a-agent.yaml
+	$(MAKE) openan-verify
+
+openan-verify:
+	@# exec into the Registry pod (python + network access to itself); a throwaway `kubectl run` pod would get an Istio sidecar and never exit.
+	@TOKEN=$$(kubectl -n $(OPENAN_NS) get secret openan-operator-token -o jsonpath='{.data.token}' | base64 -d); \
+	for i in $$(seq 1 40); do \
+	  kubectl -n $(OPENAN_NS) exec deploy/openan-registry-center-registry-center -c registry-center -- python -c "import urllib.request as u;r=u.Request('http://127.0.0.1:5000/rest/v1/registry-center/agent-cards',headers={'Authorization':'Bearer $$TOKEN'});print(u.urlopen(r).read().decode())" 2>/dev/null | grep -q "Sample-Weather-Agent" && { echo "agent card registered"; exit 0; }; \
+	  sleep 15; done; echo "agent card NOT found in the Registry Center"; exit 1

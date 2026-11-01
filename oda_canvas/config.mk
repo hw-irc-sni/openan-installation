@@ -51,3 +51,15 @@ LANGFUSE_INIT_USER_EMAIL=admin@example.com
 GRAFANA_LOCAL_PORT=3001
 PROMETHEUS_LOCAL_PORT=9090
 LANGFUSE_LOCAL_PORT=3002
+
+# OpenAN operator (charts/openan-operator, operator/openan-operator) and the stack it manages.
+OPENAN_NS=components
+OPENAN_OPERATOR_NS=canvas
+OPENAN_OPERATOR_IMAGE=openan/openan-operator
+OPENAN_OPERATOR_TAG=0.1.0
+OPENAN_RC_TAG=v1.1.2
+# No published Orchestration Center image matches the current API: it is built from OPENAN_OC_SRC.
+OPENAN_OC_TAG=src
+OPENAN_OC_SRC=../../orchestration-center
+# The portal is built from its release tarball (containerized/build/portal).
+OPENAN_FE_TAG=v1.0.0

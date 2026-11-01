@@ -1,0 +1,75 @@
+{{/* Copyright (c) 2026 Huawei Technologies Co., Ltd. All Rights Reserved. SPDX-License-Identifier: Apache-2.0 */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rc.fullname" . }}
+  labels: {{- include "rc.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app: {{ include "rc.fullname" . }}
+  template:
+    metadata:
+      labels: {{- include "rc.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+      - name: prepare-runtime
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["python", "-c", "from pathlib import Path; [Path('/runtime', p).mkdir(mode=0o770, exist_ok=True) for p in ('data', 'log')]"]
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        volumeMounts:
+        - {name: runtime, mountPath: /runtime}
+      containers:
+      - name: registry-center
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        ports:
+        - {name: http, containerPort: {{ .Values.port }}}
+        envFrom:
+        - configMapRef: {name: {{ include "rc.fullname" . }}-config}
+        - secretRef: {name: {{ .Values.runtimeSecret }}}
+        readinessProbe: {exec: {command: ["python", "-m", "agent_registry.healthcheck"]}, initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 10, failureThreshold: 12}
+        livenessProbe: {exec: {command: ["python", "-m", "agent_registry.healthcheck"]}, initialDelaySeconds: 40, periodSeconds: 30, timeoutSeconds: 10}
+        resources: {{- toYaml .Values.resources | nindent 10 }}
+        volumeMounts:
+        - {name: runtime, mountPath: /opt/registry-center/data, subPath: data}
+        - {name: runtime, mountPath: /opt/registry-center/log, subPath: log}
+        - {name: models, mountPath: /opt/registry-center/etc/config/models.yaml, subPath: models.yaml, readOnly: true}
+        - {name: credentials, mountPath: /opt/registry-center/etc/conf/integration_credentials.conf, subPath: integration_credentials.conf, readOnly: true}
+        {{- if .Values.trust.configMap }}
+        # Registry-local verification keys: <org>/<agent>.json, maintained by the OpenAN operator.
+        # Whole-directory mount (no subPath) so ConfigMap updates reach the pod without a restart.
+        - {name: trust, mountPath: "/opt/registry-center/etc/sign_verify/jwks/{{ required "trust.organization is required" .Values.trust.organization }}", readOnly: true}
+        {{- end }}
+      - name: spec
+        # Serves the hand-authored OpenAPI document; reuses the service image (python is always present).
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["python", "-m", "http.server", "{{ .Values.specPort }}", "--directory", "/spec"]
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        ports:
+        - {name: spec, containerPort: {{ .Values.specPort }}}
+        volumeMounts:
+        - {name: openapi, mountPath: /spec, readOnly: true}
+        resources: {requests: {cpu: 5m, memory: 16Mi}}
+      volumes:
+      - name: runtime
+        persistentVolumeClaim: {claimName: {{ include "rc.fullname" . }}-runtime}
+      - name: models
+        configMap: {name: {{ include "rc.fullname" . }}-models}
+      - name: openapi
+        configMap: {name: {{ include "rc.fullname" . }}-openapi}
+      - name: credentials
+        secret: {secretName: {{ .Values.credentialSecret }}, defaultMode: 0440}
+      {{- if .Values.trust.configMap }}
+      - name: trust
+        configMap: {name: {{ .Values.trust.configMap }}, optional: true}
+      {{- end }}

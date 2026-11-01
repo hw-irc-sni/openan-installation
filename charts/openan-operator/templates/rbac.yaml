@@ -29,10 +29,28 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [list, watch, get]
-  # Application: ODA Canvas resources (adjust to what the operator manages)
+  # Application: ODA Canvas resources (read Components, sync a2a ExposedAPIs)
   - apiGroups: [oda.tmforum.org]
-    resources: [components, components/status, exposedapis, exposedapis/status]
+    resources: [components, components/status]
+    verbs: [list, watch, get]
+  - apiGroups: [oda.tmforum.org]
+    resources: [exposedapis, exposedapis/status]
     verbs: [list, watch, patch, get]
+  # Application: the OpenAN CR
+  - apiGroups: [openan.dev]
+    resources: [openans, openans/status, openans/finalizers]
+    verbs: [list, watch, patch, get, update]
+  # Application: secrets and the Helm releases of the three component charts
+  # (Helm 3 stores release state in Secrets and applies the chart objects).
+  - apiGroups: [""]
+    resources: [secrets, configmaps, services, persistentvolumeclaims, pods]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [oda.tmforum.org]
+    resources: [components]
+    verbs: [create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
