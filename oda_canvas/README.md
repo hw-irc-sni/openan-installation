@@ -10,10 +10,20 @@ Stages run in this order (`make up`):
    `canvas-keycloak:8083`, admin user `admin`). Demo profile: Istio gateway only; info-service,
    resource-inventory, pdb and component-registry are off. Installed
    without `--wait` (the post-install hooks would deadlock); the Makefile waits afterwards.
-4. **Portal realm setup** (`scripts/portal-realm.sh`): adds the `canvas-portal` / `canvas-portal-admin`
+4. **Observability** (`make observability`, part of `make up`): Prometheus + Grafana
+   (`kube-prometheus-stack`, release `monitoring`, namespace `monitoring`; `observability-values.yaml.tpl`)
+   and **Langfuse** v3 (`manifests/langfuse.yaml`: web, worker, Postgres, ClickHouse, Redis, MinIO), all pods.
+   These are the three tools listed on the portal's `/observability` page, which finds them by Service name
+   (`monitoring-grafana`, `monitoring-kube-prometheus-prometheus`, `langfuse-web`) in the `monitoring`
+   namespace and health-checks them. The Canvas `api-operator-istio` is set to create `ServiceMonitor`s, so
+   the Prometheus scrapes the metrics of every deployed component. The Canvas repo's own
+   `charts/observability-stack` (Prometheus, Grafana, Jaeger, OpenTelemetry) has no Langfuse and uses Service
+   names the portal does not look for, so it is not used; Jaeger/OTel are not deployed.
+   Random Langfuse secrets are generated into the cluster Secret `langfuse-secrets` (never in git).
+5. **Portal realm setup** (`scripts/portal-realm.sh`): adds the `canvas-portal` / `canvas-portal-admin`
    clients, the `canvas-admin` group and the demo user to the Canvas realm (Keycloak partial import,
    idempotent).
-5. **canvas-portal-v2**, from `tmforum-oda/oda-canvas/canvas-portal-v2/helm/canvas-portal` with
+6. **canvas-portal-v2**, from `tmforum-oda/oda-canvas/canvas-portal-v2/helm/canvas-portal` with
    `portal-values.yaml.tpl`, pointed at the Canvas Keycloak.
 
 The Canvas must be in the namespace `canvas`: the portal detects the gateway type there. The
@@ -27,13 +37,14 @@ Prerequisites: docker, kind, kubectl, helm, envsubst (gettext), python3, curl, m
 cd oda_canvas
 make up              # cluster + istio + canvas + portal (slow: many images)
 make port-forward    # http://localhost:8080 (Ctrl-C to stop)
+make observability-forward   # Grafana :3001, Prometheus :9090, Langfuse :3002 (Ctrl-C to stop)
 make component-sample   # optional: gives /components and /exposedapis data
 make status
 make down            # delete the cluster
 ```
 
 Login: `portaladmin` / the `PORTAL_USER_PASSWORD` from `config.env` (members of `canvas-admin` may use the Helm and
-conformance APIs). Settings are in `config.mk`; passwords and secrets are in `config.env` (untracked: `cp config.env.example config.env` first); override per run,
+conformance APIs). Settings are in `config.mk`; passwords and secrets (portal user, Keycloak admin, Grafana admin, Langfuse initial user) are in `config.env` (untracked: `cp config.env.example config.env` first); override per run,
 e.g. `make up PORTAL_BUILD=false` to pull
 `tmforumodacanvas/canvas-portal:{frontend,backend}-0.1.0` instead of building the images from `PORTAL_SRC` (the default, as those tags were not found on Docker Hub).
 

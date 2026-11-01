@@ -4,6 +4,8 @@ preqrequisitechecks:
   istio: false          # kind has no LoadBalancer; the ingress address is patched by `make ingress-address`
 api-operator-istio:
   enabled: true
+  deployment:
+    openMetricsImplementation: ServiceMonitor   # component metrics are scraped by the Prometheus of `make observability`
 kong-gateway-install:
   enabled: false
 apisix-gateway-install:
