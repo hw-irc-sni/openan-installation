@@ -59,7 +59,8 @@ def test_chart_values_wiring_and_override():
     rc = stack.chart_values("o", spec, "registryCenter")
     assert rc["credentialSecret"] == "o-registry-credentials" and rc["registry"]["signatureValidation"] is False
     assert rc["image"]["tag"] == "1"
-    assert stack.chart_values("o", spec, "orchestrationCenter")["registryUrl"] == "http://custom"
+    # registryUrl is pinned: the OC sends its Registry token there, so a CR may not redirect it
+    assert stack.chart_values("o", spec, "orchestrationCenter")["registryUrl"] == "http://o-registry-center-registry-center:5000"
     assert stack.chart_values("o", spec, "frontend")["backendUrl"] == "http://o-orchestration-center-orchestration-center:5001"
 
 
@@ -281,3 +282,43 @@ def test_delete_requires_registry_confirmed_ownership(monkeypatch):
     op, calls, meta = _delete_setup(monkeypatch, None)  # already gone: nothing to do
     op.remove_card(name="api", meta=meta, namespace="ns", logger=__import__("logging").getLogger())
     assert calls == []
+
+
+def test_destination_values_are_pinned_and_dangerous_overrides_rejected():
+    evil = {"orchestrationCenter": {"values": {"registryUrl": "http://attacker"}},
+            "frontend": {"values": {"backendUrl": "http://attacker", "registryUrl": "http://attacker"}}}
+    assert stack.chart_values("o", evil, "orchestrationCenter")["registryUrl"] == "http://o-registry-center-registry-center:5000"
+    fe = stack.chart_values("o", evil, "frontend")
+    assert "attacker" not in fe["backendUrl"] + fe["registryUrl"]
+    with pytest.raises(stack.ValuesError):
+        stack.validate_values("orchestrationCenter", {"orchestration": {"extraEnv": {"agent_registry_url": "http://a"}}})
+    with pytest.raises(stack.ValuesError):
+        stack.validate_values("registryCenter", {"registry": {"extraEnv": {"REGISTRY_SIGNATURE_VALIDATION_ENABLED": "false"}}})
+    stack.validate_values("registryCenter", {"registry": {"extraEnv": {"REGISTRY_LOG_LEVEL": "debug"}}})  # harmless keys pass
+
+
+def test_image_repository_must_come_from_an_allowed_registry():
+    stack.validate_values("registryCenter", {"image": {"repository": "ghcr.io/project-openan/registry-center"}})
+    with pytest.raises(stack.ValuesError):
+        stack.validate_values("registryCenter", {"image": {"repository": "evil.example/registry-center"}})
+    stack.validate_values("registryCenter", {"image": {"repository": "reg.corp/openan/registry-center"}}, ("reg.corp/openan/",))
+
+
+def test_reconcile_rejects_a_bad_cr_before_installing_anything(monkeypatch):
+    import kopf
+    from src import openan_operator as op
+    monkeypatch.setattr(op, "ensure_secrets", lambda *a, **k: (_ for _ in ()).throw(AssertionError("secrets created")))
+    monkeypatch.setattr(op.helm_driver, "upgrade_install", lambda *a, **k: (_ for _ in ()).throw(AssertionError("installed")))
+    spec = {"registryCenter": {"values": {"image": {"tag": "1", "repository": "evil.example/rc"}}}}
+    with pytest.raises(kopf.PermanentError):
+        op.reconcile(spec=spec, name="o", namespace="ns", body={"metadata": {}}, patch=None, logger=None)
+
+
+def test_card_sync_only_trusts_the_oldest_ready_cr():
+    def cr(name, ts, ready, sync=True):
+        return {"metadata": {"name": name, "creationTimestamp": ts}, "spec": {"cardSync": {"enabled": sync}},
+                "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+    items = [cr("evil", "2026-01-02", False), cr("new", "2026-01-03", True), cr("old", "2026-01-01", True),
+             cr("off", "2025-01-01", True, sync=False)]
+    assert stack.pick_cr(items)["metadata"]["name"] == "old"
+    assert stack.pick_cr([cr("evil", "2026-01-02", False)]) is None
