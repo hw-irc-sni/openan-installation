@@ -5,17 +5,20 @@ metadata:
   name: {{ include "oc.fullname" . }}-config
   labels: {{- include "oc.labels" . | nindent 4 }}
 data:
-  ORCH_IP: "0.0.0.0"
-  ORCH_PORT: {{ .Values.port | quote }}
-  ORCH_ENABLE_HTTPS: "false"
-  ORCH_VERIFY_CLIENT: "false"
-  ORCH_FORWARDED_ALLOW_IPS: "127.0.0.1"
-  ORCH_EXTERNAL_AUTH_MODE: "user"
-  ORCH_PUBLIC_SCHEME: "http"
-  AGENT_REGISTRY_URL: {{ .Values.registryUrl | quote }}
-  PERSISTENCE_MODE: {{ .Values.orchestration.persistenceMode | quote }}
-  LLM_CONFIG_FILE: "/opt/orchestration-center/etc/config/models.yaml"
-  {{- range $k, $v := .Values.orchestration.extraEnv }}
+  {{- $generated := dict
+    "ORCH_IP" "0.0.0.0"
+    "ORCH_PORT" (.Values.port | toString)
+    "ORCH_ENABLE_HTTPS" "false"
+    "ORCH_VERIFY_CLIENT" "false"
+    "ORCH_FORWARDED_ALLOW_IPS" "127.0.0.1"
+    "ORCH_EXTERNAL_AUTH_MODE" "user"
+    "ORCH_PUBLIC_SCHEME" "http"
+    "AGENT_REGISTRY_URL" (.Values.registryUrl | toString)
+    "PERSISTENCE_MODE" (.Values.orchestration.persistenceMode | toString)
+    "LLM_CONFIG_FILE" "/opt/orchestration-center/etc/config/models.yaml" }}
+  {{- /* Generated keys are merged last: an extraEnv entry can never override them. */}}
+  {{- $env := mergeOverwrite (deepCopy (default (dict) .Values.orchestration.extraEnv)) $generated }}
+  {{- range $k, $v := $env }}
   {{ $k | quote }}: {{ $v | quote }}
   {{- end }}
 ---
