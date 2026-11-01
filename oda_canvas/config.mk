@@ -34,3 +34,20 @@ PORTAL_USER=portaladmin
 # Namespaces the portal may install Helm releases into / run conformance in.
 CANVAS_NAMESPACES=components,canvas,temp-namespace
 LOCAL_PORT=8080
+
+# Observability (`make observability`): kube-prometheus-stack (release "monitoring": Prometheus + Grafana)
+# and Langfuse. The namespace must be one the portal scans (monitoring), see /observability.
+OBS_NS=monitoring
+KPS_VERSION=92.17.0
+LANGFUSE_IMAGE_TAG=3
+LANGFUSE_POSTGRES_IMAGE=postgres:17-alpine
+LANGFUSE_CLICKHOUSE_IMAGE=clickhouse/clickhouse-server:24.12
+LANGFUSE_REDIS_IMAGE=redis:7-alpine
+LANGFUSE_MINIO_IMAGE=bitnamilegacy/minio:2025.7.23-debian-12-r3   # minio/minio is no longer published
+LANGFUSE_INIT_ORG=openan
+LANGFUSE_INIT_PROJECT=openan
+LANGFUSE_INIT_USER_EMAIL=admin@example.com
+# Host ports of `make observability-forward` (8080/8081 may be taken; Grafana and Langfuse both listen on 3000).
+GRAFANA_LOCAL_PORT=3001
+PROMETHEUS_LOCAL_PORT=9090
+LANGFUSE_LOCAL_PORT=3002
