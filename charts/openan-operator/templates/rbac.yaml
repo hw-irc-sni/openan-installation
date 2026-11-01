@@ -1,0 +1,50 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "openan-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openan-operator.labels" . | nindent 4 }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "openan-operator.fullname" . }}-role
+  labels:
+    {{- include "openan-operator.labels" . | nindent 4 }}
+rules:
+  # Framework: kopf peering and CRD discovery
+  - apiGroups: [zalando.org]
+    resources: [clusterkopfpeerings, kopfpeerings]
+    verbs: [list, watch, patch, get]
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [list, watch, get]
+  # Framework: posting events
+  - apiGroups: [events.k8s.io, ""]
+    resources: [events]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list, watch, get]
+  # Application: ODA Canvas resources (adjust to what the operator manages)
+  - apiGroups: [oda.tmforum.org]
+    resources: [components, components/status, exposedapis, exposedapis/status]
+    verbs: [list, watch, patch, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "openan-operator.fullname" . }}-rolebinding
+  labels:
+    {{- include "openan-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "openan-operator.fullname" . }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "openan-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

@@ -1,0 +1,45 @@
+# Optional private registry prefix (include trailing /) and pull secrets,
+# same convention as the ODA Canvas charts.
+global:
+  image:
+    registry: ""
+  imagePullSecrets: []
+
+deployment:
+  # Used as Deployment name, container name and `app` label.
+  # The canvas-portal-v2 Operators page matches on this name (see README).
+  operatorName: openan-operator
+  image: openan/openan-operator            # TODO: set the real image
+  version: 0.1.0                           # TODO: set the real tag
+  prereleaseSuffix: ""
+  imagePullPolicy: IfNotPresent
+  replicas: 1
+  # Comma separated list of namespaces the operator watches (kopf `-n` flags)
+  monitoredNamespaces: "components,odacompns-*"
+  # Entrypoint of the image. Defaults to a kopf operator.
+  command: ["/bin/sh", "-c"]
+  args: "kopf run {{ include \"openan-operator.monitoredNamespacesCLIOpts\" . }} --verbose /app/openanOperator.py"
+
+# Optional TM Forum operator identity, shown as a badge on the portal.
+tmf:
+  operatorId: ""        # e.g. TMFOP0xx
+  operatorName: ""      # e.g. OpenAN Operator
+
+# Environment variables for the operator (rendered into a ConfigMap)
+configmap:
+  loglevel: "20"
+  extra: {}             # e.g. OPENAN_REGISTRY_URL: "http://registry-center:8080"
+
+serviceAccount:
+  create: true
+  name: ""
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+extraEnvVars: []
