@@ -89,9 +89,16 @@ def component_ready(name: str, namespace: str) -> bool:
 @kopf.on.update(OPENAN, "v1alpha1", "openans")
 @kopf.on.resume(OPENAN, "v1alpha1", "openans")
 def reconcile(spec, name, namespace, body, patch, logger, **_):
-    ensure_secrets(name, namespace, body)
     conds, comps = [], {}
     prior_ready = True
+    prefixes = tuple(p for p in os.environ.get("ALLOWED_IMAGE_PREFIXES", "").split(",") if p) or stack.DEFAULT_IMAGE_PREFIXES
+    try:  # reject the whole CR up front, before anything is installed
+        for comp in stack.enabled_components(spec):
+            stack.validate_values(comp, spec.get(comp, {}).get("values", {}), prefixes)
+    except stack.ValuesError as e:
+        metrics.RECONCILES.labels("rejected").inc()
+        raise kopf.PermanentError(str(e))
+    ensure_secrets(name, namespace, body)  # only for CRs that passed validation
     for comp in stack.enabled_components(spec):  # ordered RC -> OC -> frontend
         if not prior_ready:
             break
@@ -169,10 +176,9 @@ def teardown(spec, name, namespace, logger, **_):
 def _registry_for(namespace: str):
     """Locate the (single) OpenAN CR in the namespace; return (RegistryClient, org, signing) or None."""
     items = _custom().list_namespaced_custom_object(OPENAN, "v1alpha1", namespace, "openans")["items"]
-    items = [i for i in items if i.get("spec", {}).get("cardSync", {}).get("enabled", True)]
-    if not items:
+    cr = stack.pick_cr(items)
+    if cr is None:
         return None
-    cr = items[0]
     n, spec = cr["metadata"]["name"], cr["spec"]
     rc_url = f"http://{stack.release_name(n, 'registryCenter')}-registry-center.{namespace}.svc.cluster.local:5000"
     if os.environ.get("REGISTRY_URL_OVERRIDE"):

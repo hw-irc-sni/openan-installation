@@ -66,6 +66,15 @@ sequenceDiagram
   allow-listed `jku` host. In-cluster HTTP does not satisfy this, so the kind demo sets
   `spec.cardSync.signing.enabled: false`, which also disables signature validation in the Registry Center.
   Production needs an HTTPS JWKS endpoint (`spec.cardSync.signing.jku`) and `REGISTRY_JWK_ALLOWLIST`.
+- **What a CR may set:** Helm `values` per component are merged over the generated ones, except the Secret
+  references, the trust store and the Registry/backend URLs, which are always the generated ones (credentials are
+  sent to those URLs). `registry.extraEnv` / `orchestration.extraEnv` may not set auth, token or registry URL
+  variables, and `image.repository` must start with an allowed prefix (default `ghcr.io/project-openan/`; override
+  with the operator env `ALLOWED_IMAGE_PREFIXES`, comma separated, e.g. via `configmap.extra`). A violating CR is
+  rejected before anything is installed. Using a Registry that is not the one the operator deploys is therefore
+  not supported through this CR.
+- Card sync uses the oldest `OpenAN` in the namespace that is Ready; the operator ships one namespaced Role per
+  monitored namespace, so wildcard namespaces such as `odacompns-*` are watched but not managed.
 - Only `a2a` ExposedAPIs are synced; the Registry Center has no MCP concept.
 - The frontend component is optional (`spec.frontend.enabled`); the portal image has no published tag.
 - Image user: published images differ (1000 vs 10001); override `values.podSecurityContext` per component.
