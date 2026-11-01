@@ -322,3 +322,27 @@ def test_card_sync_only_trusts_the_oldest_ready_cr():
              cr("off", "2025-01-01", True, sync=False)]
     assert stack.pick_cr(items)["metadata"]["name"] == "old"
     assert stack.pick_cr([cr("evil", "2026-01-02", False)]) is None
+
+
+def test_registry_auth_and_signature_policy_are_not_cr_controlled():
+    spec = {"registryCenter": {"values": {"registry": {"signatureValidation": False, "authMode": "none", "identityMode": "none",
+                                                      "publicBaseUrl": "https://x"}}}}
+    with pytest.raises(stack.ValuesError):
+        stack.validate_values("registryCenter", spec["registryCenter"]["values"])
+    rc = stack.chart_values("o", spec, "registryCenter")  # even if validation were skipped, the policy is forced
+    assert rc["registry"]["signatureValidation"] is True and "authMode" not in rc["registry"] and "identityMode" not in rc["registry"]
+    assert rc["registry"]["publicBaseUrl"] == "https://x"  # unrelated registry values still pass through
+    off = stack.chart_values("o", {**spec, "cardSync": {"signing": {"enabled": False}}}, "registryCenter")
+    assert off["registry"]["signatureValidation"] is False  # only the CR's own cardSync switch can change it
+
+
+@pytest.mark.parametrize("env", [{"agent_registry_url": "x"}, {"AGENT_REGISTRY_URL ": "x"}, {"A B": "x"}, {"X: y\n  Z": "v"},
+                                 {"1BAD": "x"}, {"OK": {"nested": "x"}}, {"OK": ["list"]}, {"OK": None}])
+def test_extra_env_names_and_values_are_strict(env):
+    with pytest.raises(stack.ValuesError):
+        stack.validate_values("orchestrationCenter", {"orchestration": {"extraEnv": env}})
+
+
+def test_extra_env_accepts_plain_variables():
+    stack.validate_values("orchestrationCenter", {"orchestration": {"extraEnv": {"LOG_LEVEL": "debug", "WORKERS": 4, "FLAG": True}}})
+    stack.validate_values("registryCenter", {"registry": {"extraEnv": {"REGISTRY_LOG_LEVEL": "debug"}}})

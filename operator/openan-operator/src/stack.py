@@ -2,6 +2,7 @@
 # All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 """Pure logic: values for the three component charts and OpenAN CR status conditions."""
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -25,15 +26,32 @@ class ValuesError(ValueError):
     """The CR carries values the operator refuses to render."""
 
 
+ENV_KEY = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+
+
 def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_IMAGE_PREFIXES) -> None:
     repo = (values.get("image") or {}).get("repository")
     if repo and not any(repo.startswith(p) for p in allowed_prefixes):
         raise ValuesError(f"{comp}: image.repository {repo!r} is outside the allowed registries {list(allowed_prefixes)}")
+    if comp == "registryCenter":
+        set_by_cr = sorted(k for k in ("authMode", "identityMode", "signatureValidation") if k in (values.get("registry") or {}))
+        if set_by_cr:
+            raise ValuesError(f"registryCenter: registry.{set_by_cr} are controlled by the operator (use spec.cardSync.signing)")
     if comp in EXTRA_ENV:
         section, key = EXTRA_ENV[comp]
-        bad = sorted(k for k in (values.get(section) or {}).get(key, {}) if k.upper() in FORBIDDEN_ENV)
+        env = (values.get(section) or {}).get(key) or {}
+        if not isinstance(env, dict):
+            raise ValuesError(f"{comp}: {section}.{key} must be a map")
+        # Exact, upper-case names only: no other spelling can alias a protected variable or reach the template.
+        malformed = sorted(str(k) for k in env if not isinstance(k, str) or not ENV_KEY.match(k))
+        if malformed:
+            raise ValuesError(f"{comp}: {section}.{key} has invalid variable names {malformed} (use [A-Z_][A-Z0-9_]*)")
+        bad = sorted(k for k in env if k in FORBIDDEN_ENV)
         if bad:
             raise ValuesError(f"{comp}: {section}.{key} may not set {bad}")
+        nonscalar = sorted(k for k, v in env.items() if not isinstance(v, (str, int, float, bool)))
+        if nonscalar:
+            raise ValuesError(f"{comp}: {section}.{key} values must be strings, numbers or booleans: {nonscalar}")
 SUFFIX = {"registryCenter": "registry-center", "orchestrationCenter": "orchestration-center", "frontend": "frontend"}
 
 
@@ -83,6 +101,13 @@ def chart_values(cr_name: str, spec: Dict[str, Any], comp: str) -> Dict[str, Any
             out[key] = gen[key]
         else:
             out.pop(key, None)
+    if comp == "registryCenter":
+        # Authentication and signature policy come from the operator, never from the CR.
+        reg = dict(out.get("registry") or {})
+        for key in ("authMode", "identityMode"):
+            reg.pop(key, None)  # chart defaults: static_bearer / token
+        reg["signatureValidation"] = gen["registry"]["signatureValidation"]
+        out["registry"] = reg
     return out
 
 

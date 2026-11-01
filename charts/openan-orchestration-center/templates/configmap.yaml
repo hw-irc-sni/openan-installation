@@ -16,7 +16,7 @@ data:
   PERSISTENCE_MODE: {{ .Values.orchestration.persistenceMode | quote }}
   LLM_CONFIG_FILE: "/opt/orchestration-center/etc/config/models.yaml"
   {{- range $k, $v := .Values.orchestration.extraEnv }}
-  {{ $k }}: {{ $v | quote }}
+  {{ $k | quote }}: {{ $v | quote }}
   {{- end }}
 ---
 apiVersion: v1

@@ -19,7 +19,7 @@ data:
   PERSISTENCE_MODE: "file"
   LLM_CONFIG_FILE: "/opt/registry-center/etc/config/models.yaml"
   {{- range $k, $v := .Values.registry.extraEnv }}
-  {{ $k }}: {{ $v | quote }}
+  {{ $k | quote }}: {{ $v | quote }}
   {{- end }}
 ---
 apiVersion: v1
