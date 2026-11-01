@@ -29,28 +29,8 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [list, watch, get]
-  # Application: ODA Canvas resources (read Components, sync a2a ExposedAPIs)
-  - apiGroups: [oda.tmforum.org]
-    resources: [components, components/status]
-    verbs: [list, watch, get]
-  - apiGroups: [oda.tmforum.org]
-    resources: [exposedapis, exposedapis/status]
-    verbs: [list, watch, patch, get]
-  # Application: the OpenAN CR
-  - apiGroups: [openan.dev]
-    resources: [openans, openans/status, openans/finalizers]
-    verbs: [list, watch, patch, get, update]
-  # Application: secrets and the Helm releases of the three component charts
-  # (Helm 3 stores release state in Secrets and applies the chart objects).
-  - apiGroups: [""]
-    resources: [secrets, configmaps, services, persistentvolumeclaims, pods]
-    verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: [apps]
-    resources: [deployments]
-    verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: [oda.tmforum.org]
-    resources: [components]
-    verbs: [create, update, patch, delete]
+  # Everything that writes (Secrets, Helm-managed objects, the OpenAN CR, ExposedAPI annotations) is granted
+  # per monitored namespace below, not cluster-wide.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -66,3 +46,52 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "openan-operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- /* Namespaced grants: one Role + RoleBinding per concrete (non-wildcard) monitored namespace. */}}
+{{- range $ns := splitList "," .Values.deployment.monitoredNamespaces }}
+{{- $ns = trim $ns }}
+{{- if and $ns (not (contains "*" $ns)) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "openan-operator.fullname" $ }}-role
+  namespace: {{ $ns }}
+  labels:
+    {{- include "openan-operator.labels" $ | nindent 4 }}
+rules:
+  # Canvas resources: read Components, create/remove the Components the OpenAN charts render, annotate ExposedAPIs
+  - apiGroups: [oda.tmforum.org]
+    resources: [components, components/status]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [oda.tmforum.org]
+    resources: [exposedapis, exposedapis/status]
+    verbs: [list, watch, patch, get]
+  # The OpenAN CR
+  - apiGroups: [openan.dev]
+    resources: [openans, openans/status, openans/finalizers]
+    verbs: [list, watch, patch, get, update]
+  # Generated Secrets, Helm release storage and the objects of the three component charts
+  - apiGroups: [""]
+    resources: [secrets, configmaps, services, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "openan-operator.fullname" $ }}-rolebinding
+  namespace: {{ $ns }}
+  labels:
+    {{- include "openan-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "openan-operator.fullname" $ }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "openan-operator.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

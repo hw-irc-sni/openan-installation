@@ -49,7 +49,7 @@ def test_credentials_use_registry_hmac_algorithm():
     want = hmac.new(key.encode(), token.encode(), hashlib.sha256).hexdigest()
     conf = s["registry-credentials"]["integration_credentials.conf"]
     assert f"token_hash={want}" in conf and "role=vendor_agent" in conf
-    assert s["orchestration-runtime"]["REGISTRY_ACCESS_TOKEN"] == token
+    assert s["orchestration-runtime"]["REGISTRY_ACCESS_TOKEN"] != token
 
 
 def test_chart_values_wiring_and_override():
@@ -186,8 +186,8 @@ def test_retain_data_detaches_pvcs_before_uninstall(monkeypatch):
         def patch_namespaced_persistent_volume_claim(self, name, ns, body):
             events.append(("patch", name, body))
 
-        def delete_collection_namespaced_persistent_volume_claim(self, ns, label_selector):
-            events.append(("delete", label_selector))
+        def delete_namespaced_persistent_volume_claim(self, name, ns):
+            events.append(("delete", name))
 
     monkeypatch.setattr(op, "_core", lambda: Core())
     monkeypatch.setattr(op.helm_driver, "uninstall", lambda rel, ns: events.append(("uninstall", rel)))
@@ -201,7 +201,7 @@ def test_retain_data_detaches_pvcs_before_uninstall(monkeypatch):
 
     events.clear()
     op.teardown(spec={"frontend": {"enabled": False}}, name="o", namespace="ns", logger=None)
-    assert "delete" in [e[0] for e in events] and "patch" not in [e[0] for e in events]
+    assert ("delete", "rc-pvc") in events and ("delete", "free-pvc") in events and "patch" not in [e[0] for e in events]
 
 
 def test_existing_detached_secrets_are_readopted_not_regenerated(monkeypatch):
@@ -222,3 +222,62 @@ def test_existing_detached_secrets_are_readopted_not_regenerated(monkeypatch):
     monkeypatch.setattr(op, "_core", lambda: Core())
     op.ensure_secrets("o", "ns", {"metadata": {"name": "o", "uid": "u1"}})
     assert patched == [("o-operator-token", "u1")] and created == []
+
+
+def test_cr_values_cannot_redirect_credentials():
+    evil = {"registryCenter": {"values": {"image": {"tag": "1"}, "runtimeSecret": "kube-root-secret",
+                                          "credentialSecret": "other", "trust": {"configMap": "x", "organization": "y"}}},
+            "orchestrationCenter": {"values": {"runtimeSecret": "other"}}}
+    rc = stack.chart_values("o", evil, "registryCenter")
+    assert rc["runtimeSecret"] == "o-registry-runtime" and rc["credentialSecret"] == "o-registry-credentials"
+    assert rc["trust"] == {"organization": "openan", "configMap": "o-registry-trust"}
+    assert stack.chart_values("o", evil, "orchestrationCenter")["runtimeSecret"] == "o-orchestration-runtime"
+    off = {**evil, "cardSync": {"signing": {"enabled": False}}}
+    assert "trust" not in stack.chart_values("o", off, "registryCenter")  # no trust mount is injected either
+
+
+def test_orchestration_center_has_its_own_registry_identity():
+    s = secrets_bootstrap.new_stack_secrets("x")
+    op, oc = s["operator-token"]["token"], s["orchestration-runtime"]["REGISTRY_ACCESS_TOKEN"]
+    assert op != oc
+    conf = s["registry-credentials"]["integration_credentials.conf"]
+    key = s["registry-runtime"]["INTEGRATION_TOKEN_HMAC_KEY"]
+    for token in (op, oc):
+        assert secrets_bootstrap.token_fingerprint(token, key) in conf
+    assert conf.count("token_hash=") == 2 and "identity=openan-orchestration-center" in conf
+
+
+def _delete_setup(monkeypatch, existing, org="acme"):
+    from src import openan_operator as op
+    calls = []
+
+    class RC:
+        def get(self, o, n):
+            return existing
+
+        def delete(self, o, n):
+            calls.append(("delete", o, n))
+
+    monkeypatch.setattr(op, "_registry_for", lambda ns: (RC(), org, {"trust_store": True}))
+    monkeypatch.setattr(op, "remove_trust_key", lambda sig, ns, n: calls.append(("trust", n)))
+    meta = {"annotations": {cards.ANNOTATION: "acme/My-Agent"}, "uid": "u1"}
+    return op, calls, meta
+
+
+def test_delete_requires_registry_confirmed_ownership(monkeypatch):
+    mine = {"capabilities": {"extensions": [{"uri": cards.OWNER_EXT, "params": {"owner": "ns/api/u1"}}]}}
+    op, calls, meta = _delete_setup(monkeypatch, mine)
+    op.remove_card(name="api", meta=meta, namespace="ns", logger=__import__("logging").getLogger())
+    assert calls == [("delete", "acme", "My-Agent"), ("trust", "My-Agent")]
+
+    foreign = {"capabilities": {"extensions": [{"uri": cards.OWNER_EXT, "params": {"owner": "ns/other/u9"}}]}}
+    op, calls, meta = _delete_setup(monkeypatch, foreign)  # annotation forged to point at somebody else's card
+    op.remove_card(name="api", meta=meta, namespace="ns", logger=__import__("logging").getLogger())
+    assert calls == []
+
+    op, calls, meta = _delete_setup(monkeypatch, mine, org="other-org")
+    op.remove_card(name="api", meta=meta, namespace="ns", logger=__import__("logging").getLogger())
+    assert calls == []
+    op, calls, meta = _delete_setup(monkeypatch, None)  # already gone: nothing to do
+    op.remove_card(name="api", meta=meta, namespace="ns", logger=__import__("logging").getLogger())
+    assert calls == []

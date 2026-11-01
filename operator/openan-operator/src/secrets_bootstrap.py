@@ -25,26 +25,30 @@ def access_password_hash(password: str) -> str:
     return "v4:" + bcrypt.hashpw(digest, bcrypt.gensalt()).decode("ascii")
 
 
-def credentials_conf(token: str, hmac_key: str, identity: str = OPERATOR_IDENTITY, role: str = "vendor_agent") -> str:
-    cid = "operator"
-    return "\n".join([
-        f"credential.{cid}.identity={identity}",
-        f"credential.{cid}.token_hash={token_fingerprint(token, hmac_key)}",
-        f"credential.{cid}.role={role}",
-        f"credential.{cid}.owner={identity}",
-        f"credential.{cid}.enabled=true", ""])
+def credentials_conf(entries, hmac_key: str) -> str:
+    """entries: [(credential id, identity, token, role)] -> integration_credentials.conf."""
+    lines = []
+    for cid, identity, token, role in entries:
+        lines += [f"credential.{cid}.identity={identity}",
+                  f"credential.{cid}.token_hash={token_fingerprint(token, hmac_key)}",
+                  f"credential.{cid}.role={role}", f"credential.{cid}.owner={identity}",
+                  f"credential.{cid}.enabled=true"]
+    return "\n".join(lines) + "\n"
 
 
 def new_stack_secrets(registry_url: str) -> Dict[str, Dict[str, str]]:
     """Return {secretName-suffix: stringData}. Callers must persist and never regenerate."""
     hmac_key, fp_key, token = secrets.token_hex(32), secrets.token_hex(32), secrets.token_urlsafe(48)
+    oc_token = secrets.token_urlsafe(48)  # own identity: revocable and auditable apart from the operator
     admin = secrets.token_urlsafe(18)
     priv, pub = generate_keypair()
     return {
         "registry-runtime": {"INTEGRATION_TOKEN_HMAC_KEY": hmac_key, "INTEGRATION_FINGERPRINT_KEY": fp_key},
-        "registry-credentials": {"integration_credentials.conf": credentials_conf(token, hmac_key)},
+        "registry-credentials": {"integration_credentials.conf": credentials_conf(
+            [("operator", OPERATOR_IDENTITY, token, "vendor_agent"),
+             ("orchestration", "openan-orchestration-center", oc_token, "vendor_agent")], hmac_key)},
         "operator-token": {"token": token},
         "orchestration-runtime": {"OC_ADMIN_INITIAL_PASSWORD": admin, "ORCH_ACCESS_PASSWORD": access_password_hash(admin),
-                                  "REGISTRY_ACCESS_TOKEN": token},
+                                  "REGISTRY_ACCESS_TOKEN": oc_token},
         "signing-key": {"private.pem": priv, "public.pem": pub},
     }

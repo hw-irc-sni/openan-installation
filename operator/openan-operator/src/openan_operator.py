@@ -121,9 +121,15 @@ def reconcile(spec, name, namespace, body, patch, logger, **_):
 
 
 def _delete_pvcs(release: str, namespace: str) -> None:
-    """Helm keeps the data PVCs (resource-policy: keep); remove them unless spec.retainData."""
-    _core().delete_collection_namespaced_persistent_volume_claim(
-        namespace, label_selector=f"app.kubernetes.io/instance={release}")
+    """Helm keeps the data PVCs (resource-policy: keep); remove them unless spec.retainData.
+    Deleted one by one: the Role grants `delete`, deliberately not `deletecollection`."""
+    for pvc in _core().list_namespaced_persistent_volume_claim(
+            namespace, label_selector=f"app.kubernetes.io/instance={release}").items:
+        try:
+            _core().delete_namespaced_persistent_volume_claim(pvc.metadata.name, namespace)
+        except client.ApiException as e:
+            if e.status != 404:
+                raise
 
 
 def _orphan_pvcs(release: str, namespace: str) -> None:
@@ -246,15 +252,27 @@ def sync_card(spec, name, namespace, meta, status, patch, logger, **_):
 
 
 @kopf.on.delete(ODA, "v1", "exposedapis", when=lambda spec, **_: is_a2a(spec))
-def remove_card(meta, namespace, logger, **_):
+def remove_card(name, meta, namespace, logger, **_):
+    """Delete the card only when the Registry says this very ExposedAPI owns it: the annotation is editable
+    by anyone who can patch the ExposedAPI and must not be trusted on its own."""
     ref = (meta.get("annotations") or {}).get(ANNOTATION)
     target = _registry_for(namespace)
     if not ref or target is None:
         return
+    rc, configured_org, signing = target
     org, _, card_name = ref.partition("/")
+    if org != configured_org:
+        logger.warning(f"not deleting {ref}: organization differs from the configured one")
+        return
     try:
-        target[0].delete(org, card_name)
-        if target[2] and target[2].get("trust_store"):
-            remove_trust_key(target[2], namespace, card_name)
+        existing = rc.get(org, card_name)
+        if existing is None:
+            return
+        if card_owner(existing) != owner_ref(namespace, name, meta["uid"]):
+            logger.warning(f"not deleting {ref}: the card is owned by {card_owner(existing) or 'another source'}")
+            return
+        rc.delete(org, card_name)
+        if signing and signing.get("trust_store"):
+            remove_trust_key(signing, namespace, card_name)
     except (RegistryError, client.ApiException) as e:
         raise kopf.TemporaryError(str(e), delay=30)

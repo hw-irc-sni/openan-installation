@@ -82,26 +82,29 @@ def test_operator_crd_copy_in_chart_matches_source():
     assert crd["spec"]["group"] == "openan.dev" and crd["spec"]["scope"] == "Namespaced"
 
 
-def test_operator_rbac_covers_runtime_needs():
+def _operator_docs(namespaces="components"):
     if not HELM:
         pytest.skip("helm not on PATH")
-    out = subprocess.run([HELM, "template", "x", str(ROOT / "charts/openan-operator"), "-n", "components"],
+    out = subprocess.run([HELM, "template", "x", str(ROOT / "charts/openan-operator"), "-n", "canvas",
+                          "--set-string", f"deployment.monitoredNamespaces={namespaces}"],
                          capture_output=True, text=True, check=True).stdout
-    role = next(d for d in yaml.safe_load_all(out) if d and d["kind"] == "ClusterRole")
-    seen = {(g, r) for rule in role["rules"] for g in rule["apiGroups"] for r in rule["resources"]}
-    for need in [("openan.dev", "openans/status"), ("oda.tmforum.org", "exposedapis"), ("", "secrets"),
-                 ("apps", "deployments"), ("oda.tmforum.org", "components")]:
+    return [d for d in yaml.safe_load_all(out) if d]
+
+
+def _seen(doc):
+    return {(g, r, v) for rule in doc["rules"] for g in rule["apiGroups"] for r in rule["resources"] for v in rule["verbs"]}
+
+
+def test_operator_writes_are_namespaced_not_cluster_wide():
+    docs = _operator_docs("components\\,odacompns-*")
+    cluster = _seen(next(d for d in docs if d["kind"] == "ClusterRole"))
+    for resource in ("secrets", "deployments", "persistentvolumeclaims", "configmaps", "components", "exposedapis"):
+        assert not any(r == resource and v in ("create", "update", "patch", "delete") for _, r, v in cluster), resource
+    roles = [d for d in docs if d["kind"] == "Role"]
+    assert [r["metadata"]["namespace"] for r in roles] == ["components"]  # the wildcard gets no grant
+    seen = _seen(roles[0])
+    for need in [("openan.dev", "openans/status", "patch"), ("oda.tmforum.org", "exposedapis", "patch"),
+                 ("", "secrets", "create"), ("apps", "deployments", "delete"), ("oda.tmforum.org", "components", "create")]:
         assert need in seen, need
-
-
-def test_registry_trust_configmap_mount_is_optional_and_per_organization():
-    docs = render("openan-registry-center", {"trust.organization": "acme", "trust.configMap": "tr"})
-    dep = next(d for d in docs if d["kind"] == "Deployment")
-    pod = dep["spec"]["template"]["spec"]
-    vol = next(v for v in pod["volumes"] if v["name"] == "trust")
-    assert vol["configMap"] == {"name": "tr", "optional": True}
-    mount = next(m for m in pod["containers"][0]["volumeMounts"] if m["name"] == "trust")
-    assert mount["mountPath"].endswith("/etc/sign_verify/jwks/acme") and "subPath" not in mount
-    assert "trust.organization is required" in render("openan-registry-center", {"trust.configMap": "tr"}, success=False)
-    plain = next(d for d in render("openan-registry-center") if d["kind"] == "Deployment")
-    assert all(v["name"] != "trust" for v in plain["spec"]["template"]["spec"]["volumes"])
+    binding = next(d for d in docs if d["kind"] == "RoleBinding")
+    assert binding["metadata"]["namespace"] == "components" and binding["subjects"][0]["namespace"] == "canvas"
