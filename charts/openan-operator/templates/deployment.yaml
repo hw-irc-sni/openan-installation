@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.deployment.operatorName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openan-operator.labels" . | nindent 4 }}
+    {{- if .Values.tmf.operatorId }}
+    oda.tmforum.org/operatorId: {{ .Values.tmf.operatorId | quote }}
+    {{- end }}
+    {{- if .Values.tmf.operatorName }}
+    oda.tmforum.org/operatorName: {{ .Values.tmf.operatorName | quote }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.deployment.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.deployment.operatorName }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.deployment.operatorName }}
+        {{- include "openan-operator.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "openan-operator.serviceAccountName" . }}
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: {{ .Values.deployment.operatorName }}
+        image: {{ include "openan-operator.dockerImage" . }}
+        imagePullPolicy: {{ include "openan-operator.imagePullPolicy" . }}
+        envFrom:
+          - configMapRef:
+              name: {{ include "openan-operator.fullname" . }}-configmap
+        {{- with .Values.extraEnvVars }}
+        env:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        command:
+          {{- toYaml .Values.deployment.command | nindent 10 }}
+        args:
+          - {{ tpl .Values.deployment.args . | quote }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
