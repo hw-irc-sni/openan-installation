@@ -91,6 +91,31 @@ cd binary/one-click
 
 The single-host [offline Compose installer](containerized/offline-install-compose/README.md) supports internal/external MySQL or PostgreSQL, independent public/backend HTTP/HTTPS, explicit credentials and readonly PKI/model mounts. It deploys one instance per application, not an HA cluster. The legacy independent offline Kubernetes build/install paths are blocked until they reuse and validate the maintained chart.
 
+## Helm repository
+
+The charts in `charts/` (`openan-operator`, `openan-registry-center`, `openan-orchestration-center`,
+`openan-frontend`) are published as a Helm repository on GitHub Pages by `.github/workflows/release-charts.yml`
+(chart-releaser). Once published:
+
+```bash
+helm repo add openan https://hw-irc-sni.github.io/openan-installation
+helm repo update
+helm search repo openan
+helm install openan-operator openan/openan-operator -n openan-operator --create-namespace
+```
+
+The enabled `openan-registry-center`, `openan-orchestration-center` and `openan-frontend` charts have no default image
+tag: set `image.tag` explicitly (see `containerized/TRANSPORT_DEPLOYMENT.md` for the deployment contract).
+
+Maintainers:
+
+- The workflow runs on pushes to `main` that touch `charts/**` (or manually) and releases a chart only when its
+  `Chart.yaml` `version` is new, so bump `version` for every change you want to publish. It creates one GitHub Release
+  per chart and updates `index.yaml` on the `gh-pages` branch.
+- One-time setup: after the first run creates `gh-pages`, enable Pages (Settings, Pages, source: branch `gh-pages`,
+  folder `/`). Forks must change the URL above to their own `https://<owner>.github.io/<repo>`.
+- Without publishing, a checkout works as well: `helm install openan-operator ./charts/openan-operator`.
+
 ## Upgrade
 
 > Container upgrades use the same explicit values file via install.sh --skip-build --skip-infra (or native helm upgrade --install). Back up data, pin image tags/source refs, and restart Pods when subPath Secrets change. Binary installer compatibility is outside this container remediation.
