@@ -30,11 +30,12 @@ CANVAS_REF=
 # Hook Jobs of the Canvas chart default to bitnamilegacy/kubectl:latest (imagePullPolicy Always, so kind load
 # is not enough). Pin a tag matching the cluster's Kubernetes version.
 HOOK_KUBECTL_TAG=1.30.2
-# Address given to istio-ingress (kind has no LoadBalancer) and how `make ingress-forward` exposes it.
+# Address given to istio-ingress (kind has no LoadBalancer); `make oda-canvas-port-forward` exposes it.
 # Conformance tests (CTK containers) need an address the containers reach: INGRESS_ADDRESS=172.17.0.1
-# INGRESS_FORWARD_ADDRESS=0.0.0.0 on Linux, host.docker.internal on Docker Desktop.
+# (host.docker.internal on Docker Desktop).
 INGRESS_ADDRESS=127.0.0.1
-INGRESS_FORWARD_ADDRESS=127.0.0.1
+# Interface(s) of the host the forwards listen on: 0.0.0.0 = any IP of the host. Comma-separated list allowed.
+FORWARD_ADDRESS=0.0.0.0
 INGRESS_HTTP_PORT=80
 INGRESS_HTTPS_PORT=443
 # canvas-portal-v2 lists Gateway API HTTPRoutes even on Istio and 404s if the CRD is missing.
@@ -65,7 +66,7 @@ LANGFUSE_MINIO_IMAGE=bitnamilegacy/minio:2025.7.23-debian-12-r3   # minio/minio 
 LANGFUSE_INIT_ORG=openan
 LANGFUSE_INIT_PROJECT=openan
 LANGFUSE_INIT_USER_EMAIL=admin@example.com
-# Host ports of `make observability-forward` (8080/8081 may be taken; Grafana and Langfuse both listen on 3000).
+# Host ports of the observability UIs in `make oda-canvas-port-forward` (8080/8081 may be taken; Grafana and Langfuse both listen on 3000).
 JAEGER_LOCAL_PORT=16686
 GRAFANA_LOCAL_PORT=3001
 PROMETHEUS_LOCAL_PORT=9090
