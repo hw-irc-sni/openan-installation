@@ -46,12 +46,39 @@ class ValuesError(ValueError):
 
 
 ENV_KEY = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+IMAGE_TAG = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+PULL_POLICIES = ("Always", "IfNotPresent", "Never")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _integer(comp: str, key: str, value: Any, lo: int, hi: int) -> None:
+    # bool is an int subclass: reject it explicitly. Strings never pass, whatever they contain.
+    if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+        raise ValuesError(f"{comp}: {key} must be an integer between {lo} and {hi}")
 
 
 def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_IMAGE_PREFIXES) -> None:
     repo = (values.get("image") or {}).get("repository")
     if repo and not any(repo.startswith(p) for p in allowed_prefixes):
         raise ValuesError(f"{comp}: image.repository {repo!r} is outside the allowed registries {list(allowed_prefixes)}")
+    image = values.get("image") or {}
+    if not isinstance(image, dict):
+        raise ValuesError(f"{comp}: image must be a map")
+    tag = image.get("tag")
+    if tag is not None and not (isinstance(tag, str) and IMAGE_TAG.match(tag)):
+        raise ValuesError(f"{comp}: image.tag {tag!r} is not a valid image tag ({IMAGE_TAG.pattern})")
+    if image.get("pullPolicy") is not None and image["pullPolicy"] not in PULL_POLICIES:
+        raise ValuesError(f"{comp}: image.pullPolicy must be one of {list(PULL_POLICIES)}")
+    if "replicas" in values:
+        _integer(comp, "replicas", values["replicas"], 0, 100)
+    for key in ("port", "specPort"):
+        if key in values:
+            _integer(comp, key, values[key], 1, 65535)
+    component = values.get("component") or {}
+    if isinstance(component, dict):
+        for key in ("id", "name", "functionalBlock", "version"):
+            if key in component and not (isinstance(component[key], str) and SAFE_NAME.match(component[key])):
+                raise ValuesError(f"{comp}: component.{key} {component[key]!r} contains characters that are not allowed")
     if comp == "registryCenter":
         set_by_cr = sorted(k for k in ("authMode", "identityMode", "signatureValidation") if k in (values.get("registry") or {}))
         if set_by_cr:

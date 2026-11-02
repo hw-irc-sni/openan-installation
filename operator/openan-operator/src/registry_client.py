@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 import httpx
 
+from .cards import OwnershipError, card_owner
+
 BASE = "/rest/v1/registry-center"
 
 
@@ -43,18 +45,28 @@ class RegistryClient:
             return cards[0] if cards else None
         return body
 
-    def upsert(self, card: Dict[str, Any]) -> str:
-        """Create or replace; returns 'created' or 'updated'."""
+    def _check_owner(self, existing: Dict[str, Any] | None, owner: str | None, org: str, name: str) -> None:
+        if owner is not None and existing is not None and card_owner(existing) != owner:
+            raise OwnershipError(f"card {org}/{name} is owned by another source ({card_owner(existing) or 'unknown'})")
+
+    def upsert(self, card: Dict[str, Any], owner: str | None = None) -> str:
+        """Create or replace; returns 'created' or 'updated'.
+
+        With `owner`, an existing card of another owner is never replaced: the check is repeated here, right before
+        the write, and again after a 409 (another writer created the card between our read and our POST).
+        """
         org, name = card["provider"]["organization"], card["name"]
         body = {"agentCards": [card]}
-        if self.get(org, name) is None:
+        existing = self.get(org, name)
+        self._check_owner(existing, owner, org, name)
+        if existing is None:
             r = self._c.post(f"{BASE}/agent-cards", json=body, headers=self._h)
-            if r.status_code == 409:  # raced with another writer: fall through to replace
-                pass
-            elif r.status_code in (200, 201):
+            if r.status_code in (200, 201):
                 return "created"
-            else:
+            if r.status_code != 409:
                 raise RegistryError(r.status_code, r.text)
+            # raced with another writer: re-read and re-check ownership before replacing what it wrote
+            self._check_owner(self.get(org, name), owner, org, name)
         r = self._c.put(self._path(org, name), json=body, headers=self._h)
         if r.status_code not in (200, 201):
             raise RegistryError(r.status_code, r.text)

@@ -9,4 +9,4 @@ spec:
   selector:
     app: {{ include "fe.fullname" . }}
   ports:
-  - {name: http, port: {{ .Values.port }}, targetPort: http, protocol: TCP}
+  - {name: http, port: {{ int .Values.port }}, targetPort: http, protocol: TCP}
