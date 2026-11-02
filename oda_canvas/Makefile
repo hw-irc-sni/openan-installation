@@ -39,7 +39,7 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
 .PHONY: bootstrap-oda-canvas canvas-portal environment oda-canvas observability preflight check check-secrets check-portal \
         cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
-        oda-canvas-port-forward status down openan-operator-image openan-operator openan-sample openan-verify
+        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample openan-verify
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -49,7 +49,7 @@ bootstrap-oda-canvas: check-secrets check-portal
 	$(MAKE) canvas-portal
 	$(MAKE) component-sample
 	@echo; echo "ODA Canvas, observability stack, portal and sample component ready."
-	@echo "Also: 'make status'. Forwarding all the UIs now (Ctrl-C stops the forwards; rerun with 'make oda-canvas-port-forward')."
+	@echo "Also: 'make status'. Forwarding all the UIs now (detached; stop with 'make oda-canvas-port-forward-stop')."
 	$(MAKE) oda-canvas-port-forward
 
 # ---- 1. environment: README "Environment installation" 1.-4. ------------------------------------------
@@ -257,26 +257,38 @@ component-verify:
 # Every UI of the demo on FORWARD_ADDRESS (default 0.0.0.0: any IP of this host). Ctrl-C stops all the forwards.
 # Ingress ports < 1024 may need privileges: INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443. For the conformance CTK
 # containers use an address they can reach: INGRESS_ADDRESS=172.17.0.1 (Docker Desktop: host.docker.internal).
+# Detached: each forward is a systemd user service (scripts/port-forward.sh), so they outlive the launching terminal and are
+# restarted if kubectl exits. Stop with `make oda-canvas-port-forward-stop`. The OpenAN portal has its own target (openan-port-forward).
+PF := bash scripts/port-forward.sh
+PF_CTX := kind-$(CLUSTER_NAME)
 oda-canvas-port-forward: ingress-address
 	@h=$$(hostname -I 2>/dev/null | awk '{print $$1}'); h=$${h:-<host-ip>}; \
 	echo "Listening on $(FORWARD_ADDRESS); replace localhost with any host address (e.g. $$h)"; \
 	echo "Portal     http://localhost:$(LOCAL_PORT)    (login: $(PORTAL_USER) / PORTAL_USER_PASSWORD in config.env)"; \
-	echo "OpenAN     http://localhost:$(OPENAN_PORTAL_LOCAL_PORT)    (OpenAN portal, only if deployed: make openan-operator)"; \
 	echo "Grafana    http://localhost:$(GRAFANA_LOCAL_PORT)    (admin / GRAFANA_ADMIN_PASSWORD in config.env)"; \
 	echo "Prometheus http://localhost:$(PROMETHEUS_LOCAL_PORT)"; \
 	echo "Jaeger     http://localhost:$(JAEGER_LOCAL_PORT)"; \
 	echo "Langfuse   http://localhost:$(LANGFUSE_LOCAL_PORT)    ($(LANGFUSE_INIT_USER_EMAIL) / LANGFUSE_INIT_USER_PASSWORD in config.env)"; \
 	echo "ExposedAPIs http://$(INGRESS_ADDRESS):$(INGRESS_HTTP_PORT) (https :$(INGRESS_HTTPS_PORT))"; \
-	trap 'kill 0' INT TERM EXIT; \
-	kubectl -n $(PORTAL_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(RELEASE)-frontend $(LOCAL_PORT):80 & \
-	{ kubectl -n $(COMPONENTS_NS) get svc openan-frontend-frontend >/dev/null 2>&1 && \
-	  kubectl -n $(COMPONENTS_NS) port-forward --address $(FORWARD_ADDRESS) svc/openan-frontend-frontend $(OPENAN_PORTAL_LOCAL_PORT):8080; } & \
-	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-grafana $(GRAFANA_LOCAL_PORT):80 & \
-	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-kube-prometheus-prometheus $(PROMETHEUS_LOCAL_PORT):9090 & \
-	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-jaeger-query $(JAEGER_LOCAL_PORT):16686 & \
-	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/langfuse-web $(LANGFUSE_LOCAL_PORT):3000 & \
-	kubectl -n istio-ingress port-forward --address $(FORWARD_ADDRESS) svc/istio-ingress $(INGRESS_HTTP_PORT):80 $(INGRESS_HTTPS_PORT):443 & \
-	wait
+	$(PF) start canvas $(PF_CTX) $(FORWARD_ADDRESS) \
+	  $(PORTAL_NS)/$(RELEASE)-frontend=$(LOCAL_PORT):80 \
+	  $(OBS_NS)/$(OBS_RELEASE)-grafana=$(GRAFANA_LOCAL_PORT):80 \
+	  $(OBS_NS)/$(OBS_RELEASE)-kube-prometheus-prometheus=$(PROMETHEUS_LOCAL_PORT):9090 \
+	  $(OBS_NS)/$(OBS_RELEASE)-jaeger-query=$(JAEGER_LOCAL_PORT):16686 \
+	  $(OBS_NS)/langfuse-web=$(LANGFUSE_LOCAL_PORT):3000 \
+	  istio-ingress/istio-ingress=$(INGRESS_HTTP_PORT):80,$(INGRESS_HTTPS_PORT):443
+
+oda-canvas-port-forward-stop:
+	@$(PF) stop canvas
+
+# OpenAN portal (namespace components), independent of the Canvas forwards: it may be deployed at a different stage.
+openan-port-forward:
+	@kubectl -n $(COMPONENTS_NS) get svc openan-frontend-frontend >/dev/null 2>&1 || { echo "OpenAN portal not deployed: run 'make openan-operator' first"; exit 1; }
+	@echo "OpenAN portal http://localhost:$(OPENAN_PORTAL_LOCAL_PORT)"
+	@$(PF) start openan $(PF_CTX) $(FORWARD_ADDRESS) $(COMPONENTS_NS)/openan-frontend-frontend=$(OPENAN_PORTAL_LOCAL_PORT):8080
+
+openan-port-forward-stop:
+	@$(PF) stop openan
 
 status:
 	@kubectl get pods -A | grep -E "$(PORTAL_NS)|$(CANVAS_NS)|$(COMPONENTS_NS)|$(OBS_NS)|istio|NAMESPACE"

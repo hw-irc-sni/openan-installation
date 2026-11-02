@@ -77,8 +77,9 @@ make component-sample         # reference component must reach "Complete"
 # or all five in one go (slow: many images):
 make bootstrap-oda-canvas
 make oda-canvas-port-forward  # all UIs on every host IP (FORWARD_ADDRESS=0.0.0.0): portal :8080, Grafana :3001,
-                              # Prometheus :9090, Jaeger :16686, Langfuse :3002, OpenAN portal :8082, ExposedAPIs :80/:443 (Ctrl-C to stop;
-                              # already the last step of bootstrap-oda-canvas)
+                              # Prometheus :9090, Jaeger :16686, Langfuse :3002, ExposedAPIs :80/:443 (detached: systemd user services, survive a closed
+                              # terminal and auto-restart; `make oda-canvas-port-forward-stop`; already the last step of bootstrap-oda-canvas)
+make openan-port-forward      # OpenAN portal :8082, same detached mode, independent of the above (`make openan-port-forward-stop`)
 make status
 make down                     # delete the cluster
 ```
@@ -217,7 +218,7 @@ it is reached through a port-forward, in one of two ways:
 
 | Access | URL | How |
 |---|---|---|
-| Direct to the service | `http://<host>:8082/` (`OPENAN_PORTAL_LOCAL_PORT`) | `make oda-canvas-port-forward` (skipped if the portal is not deployed), or `kubectl -n components port-forward --address 0.0.0.0 svc/openan-frontend-frontend 8082:8080` |
+| Direct to the service | `http://<host>:8082/` (`OPENAN_PORTAL_LOCAL_PORT`) | `make openan-port-forward` (detached), or `kubectl -n components port-forward --address 0.0.0.0 svc/openan-frontend-frontend 8082:8080` |
 | Through the Istio gateway | `https://<host>:8443/` | `make openan-portal-route` once, then `make oda-canvas-port-forward INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443` |
 
 `<host>` is `localhost` or any host address (the forwards listen on `FORWARD_ADDRESS`, default `0.0.0.0`). The gateway
