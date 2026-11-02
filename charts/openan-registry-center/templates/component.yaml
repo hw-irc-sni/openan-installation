@@ -10,12 +10,12 @@ metadata:
     oda.tmforum.org/componentName: {{ include "rc.componentName" . }}
 spec:
   componentMetadata:
-    id: {{ .Values.component.id }}
-    name: {{ .Values.component.name }}
-    functionalBlock: {{ .Values.component.functionalBlock }}
+    id: {{ .Values.component.id | quote }}
+    name: {{ .Values.component.name | quote }}
+    functionalBlock: {{ .Values.component.functionalBlock | quote }}
     publicationDate: {{ .Values.component.publicationDate | quote }}
     status: specified
-    version: {{ .Values.component.version }}
+    version: {{ .Values.component.version | quote }}
     description: "OpenAN Registry Center: registry and semantic search of signed A2A Agent Cards."
     maintainers:
     - name: OpenAN
@@ -27,11 +27,11 @@ spec:
     exposedAPIs:
     - name: agentregistry
       specification:
-      - url: "http://{{ include "rc.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.specPort }}/registry-center.yaml"
+      - url: "http://{{ include "rc.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ int .Values.specPort }}/registry-center.yaml"
       implementation: {{ include "rc.fullname" . }}
       apiType: openapi
       path: /{{ include "rc.componentName" . }}/rest/v1/registry-center
-      port: {{ .Values.port }}
+      port: {{ int .Values.port }}
       gatewayConfiguration:
         apiKeyVerification: {{ .Values.component.apipolicy.apiKeyVerification | toYaml | nindent 10 }}
         rateLimit: {{ .Values.component.apipolicy.rateLimit | toYaml | nindent 10 }}

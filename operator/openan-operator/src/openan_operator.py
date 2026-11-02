@@ -242,7 +242,7 @@ def sync_card(spec, name, namespace, meta, status, patch, logger, **_):
             raise OwnershipError(f"card {org}/{card['name']} is owned by another source ({card_owner(existing) or 'unknown'})")
         if signing and signing.get("trust_store"):
             publish_trust_key(signing, namespace, card["name"])
-        action = rc.upsert(card)
+        action = rc.upsert(card, owner=me)
     except OwnershipError as e:
         metrics.CARD_SYNC.labels("upsert", "rejected").inc()
         raise kopf.PermanentError(str(e))
