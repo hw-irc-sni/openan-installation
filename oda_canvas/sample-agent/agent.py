@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 import time
 
 import uvicorn
@@ -137,8 +138,9 @@ class TaskTChecker:
         from pathlib import Path
         from a2a_t.server.a2at_server import A2ATServer
         # The SDK reads a .env file (not the process environment): render one from the LLM_* settings.
-        env_file = Path(os.environ.get("A2AT_ENV_FILE", "/tmp/a2at.env"))
-        env_file.write_text("\n".join([
+        # Owner-only: private temp dir (0700) and a 0600 file, created exclusively, since it holds the API key.
+        env_file = Path(tempfile.mkdtemp(prefix="a2at-")) / "a2at.env"
+        content = "\n".join([
             "A2AT_LANGUAGE=en-US",
             "A2AT_PROMPT_SOURCE_TYPE=packaged",
             "A2AT_LLM_PROVIDER=openai",
@@ -147,7 +149,10 @@ class TaskTChecker:
             f"A2AT_LLM_BASE_URL={LLM_BASE_URL}",
             f"A2AT_LLM_TIMEOUT_SECONDS={int(LLM_TIMEOUT)}",
             "",
-        ]), encoding="utf-8")
+        ])
+        fd = os.open(env_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
         _merge_system_messages()
         self._server = A2ATServer(env_path=env_file)
 
