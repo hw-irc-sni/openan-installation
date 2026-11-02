@@ -39,7 +39,7 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
 .PHONY: bootstrap-oda-canvas canvas-portal environment oda-canvas observability preflight check check-secrets check-portal \
         cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
-        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample openan-verify
+        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-sample openan-verify
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -332,18 +332,22 @@ openan-operator:
 openan-portal-route:
 	kubectl apply -f manifests/openan/portal-virtualservice.yaml
 
+# Sample-A2A-T-Agent image (a2a-sdk + a2a-t-sdk, answers with the LLM): built by the Docker daemon (which honours its proxy
+# settings) and loaded into kind, whose nodes cannot pull.
+openan-sample-image:
+	docker build -t $(OPENAN_SAMPLE_AGENT_IMAGE) sample-agent
+	kind load docker-image $(OPENAN_SAMPLE_AGENT_IMAGE) --name $(CLUSTER_NAME)
+
 # A sample a2a Component: its Agent Card must show up in the Registry Center.
-openan-sample:
-	@# kind nodes cannot pull from Docker Hub: load the sample's image(s) from the Docker daemon first.
-	@for i in $$(grep -hoE 'image:[[:space:]]*[^[:space:]]+' manifests/openan/sample-a2a-agent.yaml | awk '{print $$2}' | sort -u); do \
-	  docker image inspect $$i >/dev/null 2>&1 || docker pull -q $$i; \
-	  kind load docker-image $$i --name $(CLUSTER_NAME); done
-	kubectl apply -f manifests/openan/sample-a2a-agent.yaml
+openan-sample: openan-sample-image
+	@mkdir -p .rendered
+	@envsubst '$${OPENAN_SAMPLE_AGENT_IMAGE} $${OPENAN_LLM_BASE_URL} $${OPENAN_LLM_MODEL}' < manifests/openan/sample-a2a-agent.yaml.tpl > .rendered/sample-a2a-agent.yaml
+	kubectl apply -f .rendered/sample-a2a-agent.yaml
 	$(MAKE) openan-verify
 
 openan-verify:
 	@# exec into the Registry pod (python + network access to itself); a throwaway `kubectl run` pod would get an Istio sidecar and never exit.
 	@TOKEN=$$(kubectl -n $(OPENAN_NS) get secret openan-operator-token -o jsonpath='{.data.token}' | base64 -d); \
 	for i in $$(seq 1 40); do \
-	  kubectl -n $(OPENAN_NS) exec deploy/openan-registry-center-registry-center -c registry-center -- python -c "import urllib.request as u;r=u.Request('http://127.0.0.1:5000/rest/v1/registry-center/agent-cards',headers={'Authorization':'Bearer $$TOKEN'});print(u.urlopen(r).read().decode())" 2>/dev/null | grep -q "Sample-Weather-Agent" && { echo "agent card registered"; exit 0; }; \
+	  kubectl -n $(OPENAN_NS) exec deploy/openan-registry-center-registry-center -c registry-center -- python -c "import urllib.request as u;r=u.Request('http://127.0.0.1:5000/rest/v1/registry-center/agent-cards',headers={'Authorization':'Bearer $$TOKEN'});print(u.urlopen(r).read().decode())" 2>/dev/null | grep -q "Sample-A2A-T-Agent" && { echo "agent card registered"; exit 0; }; \
 	  sleep 15; done; echo "agent card NOT found in the Registry Center"; exit 1

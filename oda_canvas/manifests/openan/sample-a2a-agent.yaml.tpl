@@ -1,18 +1,7 @@
-# Minimal A2A agent component: nginx serving an agent card. The OpenAN operator discovers the
-# a2a ExposedAPI and publishes the card in the Registry Center.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: sample-agent-card
-  namespace: components
-  labels: {oda.tmforum.org/componentName: sample-agent-sampleagent}
-data:
-  agent-card.json: |
-    {"name":"Sample Weather Agent","description":"Demo A2A agent exposed by an ODA component",
-     "version":"1.0.0","url":"http://sample-agent.components.svc.cluster.local:8080/a2a",
-     "capabilities":{"streaming":false},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],
-     "skills":[{"id":"weather","name":"Weather","description":"Reports the weather","tags":["demo"]}]}
----
+# Sample-A2A-T-Agent: an A2A (a2a-sdk) + A2A-T (a2a-t-sdk, Task-T extension) agent that passes every message it
+# receives to the LLM and replies with the answer. Source and image: ../../sample-agent (`make openan-sample-image`).
+# Rendered with envsubst (`make openan-sample`). The OpenAN operator discovers the a2a ExposedAPI and publishes the
+# Agent Card in the Registry Center.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,17 +16,17 @@ spec:
       labels: {app: sample-agent, oda.tmforum.org/componentName: sample-agent-sampleagent}
     spec:
       containers:
-      - name: nginx
-        image: nginx:1.27-alpine
-        command: ["/bin/sh", "-c"]
-        args:
-        - |
-          mkdir -p /srv/.well-known && cp /card/agent-card.json /srv/.well-known/agent-card.json
-          printf 'server { listen 8080; root /srv; location / { default_type application/json; try_files $uri =404; } }' > /etc/nginx/conf.d/default.conf
-          exec nginx -g 'daemon off;'
+      - name: agent
+        image: ${OPENAN_SAMPLE_AGENT_IMAGE}
+        imagePullPolicy: IfNotPresent
+        env:
+        - {name: AGENT_PUBLIC_URL, value: "http://sample-agent.components.svc.cluster.local:8080/a2a"}
+        - {name: A2A_RPC_PATHS, value: "/a2a,/sample-agent-sampleagent/a2a"}
+        - {name: LLM_BASE_URL, value: "${OPENAN_LLM_BASE_URL}"}
+        - {name: LLM_MODEL, value: "${OPENAN_LLM_MODEL}"}
         ports: [{containerPort: 8080}]
-        volumeMounts: [{name: card, mountPath: /card}]
-      volumes: [{name: card, configMap: {name: sample-agent-card}}]
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 5}
+        securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
 ---
 apiVersion: v1
 kind: Service
@@ -63,12 +52,12 @@ spec:
     publicationDate: "2026-11-01T00:00:00.000Z"
     status: specified
     version: 1.0.0
-    description: "Sample A2A agent component for the OpenAN operator demo."
+    description: "Sample-A2A-T-Agent: A2A + A2A-T (Task-T) agent that answers every message with an LLM."
     maintainers: [{name: OpenAN, email: openan@example.invalid}]
     owners: [{name: OpenAN, email: openan@example.invalid}]
   coreFunction:
     exposedAPIs:
-    - name: weatheragent
+    - name: a2tagent
       apiType: a2a
       specification:
       - url: http://sample-agent.components.svc.cluster.local:8080/.well-known/agent-card.json
