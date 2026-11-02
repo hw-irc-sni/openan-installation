@@ -316,6 +316,10 @@ openan-operator:
 	kubectl apply -f .rendered/openan-cr.yaml
 	kubectl -n $(OPENAN_NS) wait --for=condition=Ready openan/openan --timeout=10m
 
+# Portal on the Istio gateway at "/" (catch-all: apply after the ExposedAPI routes exist).
+openan-portal-route:
+	kubectl apply -f manifests/openan/portal-virtualservice.yaml
+
 # A sample a2a Component: its Agent Card must show up in the Registry Center.
 openan-sample:
 	kubectl apply -f manifests/openan/sample-a2a-agent.yaml
