@@ -39,7 +39,7 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
 .PHONY: bootstrap-oda-canvas canvas-portal environment oda-canvas observability preflight check check-secrets check-portal \
         cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
-        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify openan-clean
+        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify openan-clean bootstrap-openan
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -377,4 +377,19 @@ openan-clean:
 	kubectl -n $(OPENAN_NS) delete pvc -l 'app.kubernetes.io/instance in (openan-registry-center,openan-orchestration-center,openan-frontend)' --ignore-not-found
 	@if helm repo list 2>/dev/null | awk 'NR>1{print $$1}' | grep -qx '$(OPENAN_HELM_REPO)'; then \
 	  helm repo remove $(OPENAN_HELM_REPO); else echo "Helm repo $(OPENAN_HELM_REPO) not added"; fi
-	@echo "OpenAN removed. Start again with: make openan-operator-image openan-operator openan-portal-route openan-sample"
+	@echo "OpenAN removed. Start again with: make bootstrap-openan"
+
+# The whole OpenAN start sequence, on top of a running Canvas (`make bootstrap-oda-canvas`). Order matters:
+#   images -> operator + OpenAN CR (Registry Center, Orchestration Center, portal) -> sample agent (waits for its card) ->
+#   portal route LAST (a catch-all "/" on the Istio gateway must be the newest route) -> detached portal port-forward.
+# Undo with `make openan-clean`. The gateway route is reachable through `make oda-canvas-port-forward` (ingress ports).
+bootstrap-openan:
+	@kubectl get crd components.oda.tmforum.org >/dev/null 2>&1 && kubectl -n $(CANVAS_NS) get statefulset canvas-keycloak >/dev/null 2>&1 \
+	  || { echo "Canvas not found: run 'make bootstrap-oda-canvas' (or 'make oda-canvas') first"; exit 1; }
+	$(MAKE) openan-operator-image
+	$(MAKE) openan-operator
+	$(MAKE) openan-sample
+	$(MAKE) openan-portal-route
+	@echo; echo "OpenAN ready: operator, Registry Center, Orchestration Center, portal and Sample-A2A-T-Agent."
+	@echo "Portal through the gateway: https://<host>:$(INGRESS_HTTPS_PORT)/ (needs 'make oda-canvas-port-forward'); direct forward below."
+	$(MAKE) openan-port-forward

@@ -205,6 +205,10 @@ Components and publishes Canvas `a2a` ExposedAPIs as Agent Cards in the Registry
 make openan-operator-image   # build the operator image, pull RC/OC images, kind load them
 make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orchestration Center)
 make openan-sample           # Sample-A2A-T-Agent: builds its image (sample-agent/), loads it into kind, deploys it; waits until its card is in the Registry
+make openan-portal-route     # portal on the Istio gateway at "/" (last: it is a catch-all route)
+# or all of it in the right order, on top of a running Canvas:
+make bootstrap-openan        # openan-operator-image, openan-operator, openan-sample, openan-portal-route, openan-port-forward
+make openan-clean            # remove everything the openan-* targets created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
 ```
 
 Demo limits: Agent Cards are ES256-signed (`cardSync.signing.enabled: true` in `openan-cr.yaml.tpl`); the Registry verifies them with keys from the operator-maintained trust ConfigMap (`<cr>-registry-trust`), so no HTTPS `jku` endpoint is needed (the ConfigMap is created when the first a2a Agent Card is fetched, so it is absent until then, e.g. while `sample-agent` is in `ImagePullBackOff`). The Registry mounts it as optional, so the first publish can get `401 no valid signature with a trusted key` until the kubelet syncs the mount into the pod (about a minute); the operator retries and then succeeds. RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
