@@ -75,9 +75,13 @@ sequenceDiagram
   operator racing during a restart), Helm leaves the revision in `pending-install`/`pending-upgrade`/`pending-rollback` and
   refuses every later upgrade ("another operation (install/upgrade/rollback) is in progress"). Before each upgrade the
   operator checks the release history; a latest revision pending for longer than `HELM_PENDING_STALE_SECONDS` (default 150 s,
-  above the 120 s `helm` timeout, so it cannot belong to a live operation) is repaired: `helm rollback` to the last
-  `deployed`/`superseded` revision, or `helm uninstall` when there is none (a failed first install; the data PVCs are kept by
-  their resource policy) so that the upgrade installs it afresh. Each repair is logged (`openan.helm`, warning) and counted in
+  never below 150 s: the `helm` timeout is 120 s, so a younger revision may belong to a live operation; set it through the
+  chart's `configmap.extra`) is repaired:
+  `helm rollback` to the last `deployed`/`superseded` revision, or, only for a first install that never completed
+  (`pending-install`, revision 1; nothing to lose), `helm uninstall` so that the upgrade installs it afresh. A release that
+  was installed before and has no good revision to go back to is **not** uninstalled (the Canvas adopts its data PVCs, so
+  removing the Component would delete the data): the reconcile reports the error and retries until someone fixes or deletes
+  the release. Each repair is logged (`openan.helm`, warning) and counted in
   `openan_operator_helm_recoveries_total{action="rolled-back"|"uninstalled"}`. A younger pending revision is left alone and
   the reconcile retries after 30 s.
 - **What a CR may set:** Helm `values` per component are merged over the generated ones, except the Secret
