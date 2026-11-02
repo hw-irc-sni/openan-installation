@@ -21,7 +21,22 @@ INIT_JOB_IMAGE=python:3.12-alpine   # hardcoded in the chart keycloak-init hook
 CANVAS_SRC=../../../tmforum-oda/oda-canvas
 CANVAS_RELEASE=canvas
 ISTIO_VERSION=1.26.3
-KIND_NODE_IMAGE=kindest/node:v1.30.0   # Canvas supports Kubernetes <= 1.30
+# Canvas supports Kubernetes <= 1.30; rendered into the kind config.
+KIND_NODE_IMAGE=kindest/node:v1.30.0
+# Minimum Helm: the Makefile uses `--skip-schema-validation` (3.16). Helm 4 is accepted with a warning.
+HELM_MIN=3.16
+# Optional: pin the Canvas checkout (git revision prefix); `make environment` fails if CANVAS_SRC is elsewhere.
+CANVAS_REF=
+# Hook Jobs of the Canvas chart default to bitnamilegacy/kubectl:latest (imagePullPolicy Always, so kind load
+# is not enough). Pin a tag matching the cluster's Kubernetes version.
+HOOK_KUBECTL_TAG=1.30.2
+# Address given to istio-ingress (kind has no LoadBalancer) and how `make ingress-forward` exposes it.
+# Conformance tests (CTK containers) need an address the containers reach: INGRESS_ADDRESS=172.17.0.1
+# INGRESS_FORWARD_ADDRESS=0.0.0.0 on Linux, host.docker.internal on Docker Desktop.
+INGRESS_ADDRESS=127.0.0.1
+INGRESS_FORWARD_ADDRESS=127.0.0.1
+INGRESS_HTTP_PORT=80
+INGRESS_HTTPS_PORT=443
 # canvas-portal-v2 lists Gateway API HTTPRoutes even on Istio and 404s if the CRD is missing.
 GATEWAY_API_CRDS=https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
 
@@ -31,14 +46,17 @@ KC_ADMIN_USER=admin
 KC_REALM=odari
 PORTAL_USER=portaladmin
 
-# Namespaces the portal may install Helm releases into / run conformance in.
-CANVAS_NAMESPACES=components,canvas,temp-namespace
+# Component namespaces created (if missing) and labelled istio-injection=enabled after the Canvas install.
+# The Canvas operators only reconcile 'components' and 'odacompns-*', so keep this list inside that scope.
+COMPONENT_NAMESPACES=components
 LOCAL_PORT=8080
 
-# Observability (`make observability`): kube-prometheus-stack (release "monitoring": Prometheus + Grafana)
-# and Langfuse. The namespace must be one the portal scans (monitoring), see /observability.
+# Observability (`make observability`): the Canvas charts/observability-stack (release "monitoring":
+# Prometheus + Grafana + OpenTelemetry collector + Jaeger) and Langfuse. The namespace must be one the portal scans (monitoring), see /observability.
 OBS_NS=monitoring
-KPS_VERSION=92.17.0
+OBS_RELEASE=monitoring
+# Jaeger all-in-one tag (the chart default is 'latest').
+JAEGER_IMAGE_TAG=1.62.0
 LANGFUSE_IMAGE_TAG=3
 LANGFUSE_POSTGRES_IMAGE=postgres:17-alpine
 LANGFUSE_CLICKHOUSE_IMAGE=clickhouse/clickhouse-server:24.12
@@ -48,6 +66,7 @@ LANGFUSE_INIT_ORG=openan
 LANGFUSE_INIT_PROJECT=openan
 LANGFUSE_INIT_USER_EMAIL=admin@example.com
 # Host ports of `make observability-forward` (8080/8081 may be taken; Grafana and Langfuse both listen on 3000).
+JAEGER_LOCAL_PORT=16686
 GRAFANA_LOCAL_PORT=3001
 PROMETHEUS_LOCAL_PORT=9090
 LANGFUSE_LOCAL_PORT=3002
