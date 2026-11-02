@@ -49,6 +49,7 @@ spec:
             - {name: LANGFUSE_INIT_PROJECT_NAME, value: "${LANGFUSE_INIT_PROJECT}"}
             - {name: LANGFUSE_INIT_USER_EMAIL, value: "${LANGFUSE_INIT_USER_EMAIL}"}
             - {name: LANGFUSE_INIT_USER_NAME, value: "admin"}
+            - {name: HOSTNAME, value: "0.0.0.0"}   # Next.js binds to $HOSTNAME (the pod IP by default); kubectl port-forward connects via localhost
           startupProbe:   # first start runs the Postgres + ClickHouse migrations
             httpGet: {path: /api/public/health, port: 3000}
             periodSeconds: 5
