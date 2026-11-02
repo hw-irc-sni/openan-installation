@@ -1,0 +1,21 @@
+# Exposes the OpenAN portal on the Canvas Istio gateway at "/" (https://<ingress>/).
+# The portal's nginx uses absolute paths (/api/orchestrate, /assets), so it cannot sit under a prefix.
+# Istio merges the VirtualServices of host "*" in creation order; the ExposedAPI routes use specific
+# prefixes, so this catch-all must be created last (re-apply it after recreating a Component).
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: openan-frontend-portal
+  namespace: components
+spec:
+  hosts: ["*"]
+  gateways: [canvas/component-gateway]
+  http:
+    - match:
+        - uri:
+            prefix: /
+      route:
+        - destination:
+            host: openan-frontend-frontend
+            port:
+              number: 8080
