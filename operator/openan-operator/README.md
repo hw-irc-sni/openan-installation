@@ -71,6 +71,15 @@ sequenceDiagram
   trusted key`; the operator retries it and it then succeeds.
   Setting it to `false` disables signature validation in the Registry Center. Production should serve the keys from an
   HTTPS JWKS endpoint (`spec.cardSync.signing.jku`) with `REGISTRY_JWK_ALLOWLIST`.
+- **Stuck Helm releases**: if an operator pod dies in the middle of `helm upgrade --install` (OOM, node drain, a second
+  operator racing during a restart), Helm leaves the revision in `pending-install`/`pending-upgrade`/`pending-rollback` and
+  refuses every later upgrade ("another operation (install/upgrade/rollback) is in progress"). Before each upgrade the
+  operator checks the release history; a latest revision pending for longer than `HELM_PENDING_STALE_SECONDS` (default 150 s,
+  above the 120 s `helm` timeout, so it cannot belong to a live operation) is repaired: `helm rollback` to the last
+  `deployed`/`superseded` revision, or `helm uninstall` when there is none (a failed first install; the data PVCs are kept by
+  their resource policy) so that the upgrade installs it afresh. Each repair is logged (`openan.helm`, warning) and counted in
+  `openan_operator_helm_recoveries_total{action="rolled-back"|"uninstalled"}`. A younger pending revision is left alone and
+  the reconcile retries after 30 s.
 - **What a CR may set:** Helm `values` per component are merged over the generated ones, except the Secret
   references, the trust store and the Registry/backend URLs, which are always the generated ones (credentials are
   sent to those URLs). `registry.extraEnv` / `orchestration.extraEnv` may not set auth, token or registry URL
