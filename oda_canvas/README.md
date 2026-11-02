@@ -157,6 +157,39 @@ order of magnitude: they depend on network speed and on which images are already
 `component-sample` and `oda-canvas` are about 59% of the total, mostly image pulls, loading them into kind and the
 Helm waits.
 
+### OpenAN recycle timing
+
+One measured run of `make openan-clean && make bootstrap-openan` (2026-11-02, same Linux host and kind cluster, Canvas
+already running, Docker image cache warm: nothing was pulled or rebuilt, so a cold run is slower). Everything was serving
+(`complete` event with the LLM answer from `Sample-A2A-T-Agent` through the Orchestration Center) 7 min 00 s after the clean
+started. An identical run just before took 6 min 54 s, so the numbers are repeatable within a few seconds on a warm host. Same
+caveat as above: treat them as an order of magnitude.
+
+| Target | Time | Notes |
+|---|---|---|
+| **`make openan-clean`** | **1 m 06 s** | |
+| ↳ route, sample agent, OpenAN CR, operator release, CRD | 5.7 s | the operator's finalizers uninstall the three component releases |
+| ↳ data PVCs | 59.5 s | `kubectl delete pvc` waits for the old pods to finish terminating (60 s grace period) |
+| ↳ `openan` Helm repo | < 1 s | removed only if present (it was already gone in this run) |
+| **`bootstrap-openan`** | **5 m 54 s** | |
+| ↳ `openan-operator-image` | 2.5 s | images already built and cached |
+| ↳ **`openan-operator`** | **3 m 32 s** | |
+| &nbsp;&nbsp;&nbsp;↳ CRD, operator Helm install | 3.9 s | |
+| &nbsp;&nbsp;&nbsp;↳ restart, rollout, wait for the old operator pod to be gone | 33.2 s | the 30 s grace period of the old pod |
+| &nbsp;&nbsp;&nbsp;↳ `OpenAN` CR to Ready (Registry Center, Orchestration Center, portal) | 2 m 55 s | the longest step: three Helm releases one after the other, each waiting for its Component to be Complete |
+| ↳ **`openan-sample`** | **2 m 13 s** | |
+| &nbsp;&nbsp;&nbsp;↳ image build (cached) and `kind load`, apply | 1.9 s | |
+| &nbsp;&nbsp;&nbsp;↳ `openan-verify` | 2 m 11 s | operator fetch and signing, then the Registry accepts the card once the kubelet has synced the trust ConfigMap into its pod |
+| ↳ `openan-portal-route` | 0.9 s | |
+| ↳ `openan-port-forward` | 4.3 s | systemd user service |
+| **Total (clean + bootstrap)** | **7 m 00 s** | |
+
+`openan-operator` waits for the old operator pod to terminate before it applies the CR. Without that wait, the terminating
+pod and the new one reconcile the CR at the same time and both run `helm upgrade --install`; the pod that is killed
+mid-upgrade leaves the release in `pending-upgrade`, every later upgrade fails with "another operation (install/upgrade/
+rollback) is in progress", and the CR never gets Ready (`make bootstrap-openan` times out after 10 minutes). If it ever happens,
+`make openan-clean` removes the stuck release and a new `make bootstrap-openan` starts clean.
+
 ## Design notes
 
 - Portal Services are `ClusterIP` (the chart has no nodePort setting), so access is by `port-forward`.

@@ -320,9 +320,14 @@ openan-operator:
 	helm upgrade --install openan-operator $(OPENAN_ROOT)/charts/openan-operator -n $(OPENAN_OPERATOR_NS) --create-namespace \
 	  --set deployment.image=$(OPENAN_OPERATOR_IMAGE) --set deployment.version=$(OPENAN_OPERATOR_TAG) \
 	  --set deployment.monitoredNamespaces='$(OPENAN_NS)' --wait --timeout 3m
-	@# `kind load` replaces the image under an unchanged tag: restart so the new build is the one running.
-	kubectl -n $(OPENAN_OPERATOR_NS) rollout restart deploy/openan-operator
-	kubectl -n $(OPENAN_OPERATOR_NS) rollout status deploy/openan-operator --timeout=3m
+	@# `kind load` replaces the image under an unchanged tag: restart so the new build is the one running. `rollout status`
+	@# returns while the old pod is still terminating (it keeps reconciling for its 30 s grace period); two operators on
+	@# the same CR race on `helm upgrade --install`, and the one that is killed mid-upgrade leaves the release stuck in
+	@# pending-upgrade for good. So wait until the old pod is gone before the OpenAN CR is applied.
+	old=$$(kubectl -n $(OPENAN_OPERATOR_NS) get pods -l app=openan-operator -o name); \
+	kubectl -n $(OPENAN_OPERATOR_NS) rollout restart deploy/openan-operator && \
+	kubectl -n $(OPENAN_OPERATOR_NS) rollout status deploy/openan-operator --timeout=3m && \
+	{ [ -z "$$old" ] || kubectl -n $(OPENAN_OPERATOR_NS) wait --for=delete $$old --timeout=3m; }
 	@mkdir -p .rendered
 	@envsubst < manifests/openan/openan-cr.yaml.tpl > .rendered/openan-cr.yaml
 	kubectl apply -f .rendered/openan-cr.yaml
