@@ -71,6 +71,7 @@ JAEGER_LOCAL_PORT=16686
 GRAFANA_LOCAL_PORT=3001
 PROMETHEUS_LOCAL_PORT=9090
 LANGFUSE_LOCAL_PORT=3002
+OPENAN_PORTAL_LOCAL_PORT=8082
 
 # OpenAN operator (charts/openan-operator, operator/openan-operator) and the stack it manages.
 OPENAN_NS=components
