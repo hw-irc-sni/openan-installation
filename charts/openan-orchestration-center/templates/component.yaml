@@ -1,0 +1,50 @@
+{{/* Copyright (c) 2026 Huawei Technologies Co., Ltd. All Rights Reserved. SPDX-License-Identifier: Apache-2.0 */}}
+{{- if not .Values.image.tag }}{{ fail "image.tag is required" }}{{- end }}
+{{- if not .Values.runtimeSecret }}{{ fail "runtimeSecret is required" }}{{- end }}
+{{- if not .Values.registryUrl }}{{ fail "registryUrl is required" }}{{- end }}
+apiVersion: oda.tmforum.org/v1
+kind: Component
+metadata:
+  name: {{ include "oc.componentName" . }}
+  labels:
+    oda.tmforum.org/componentName: {{ include "oc.componentName" . }}
+spec:
+  componentMetadata:
+    id: {{ .Values.component.id }}
+    name: {{ .Values.component.name }}
+    functionalBlock: {{ .Values.component.functionalBlock }}
+    publicationDate: {{ .Values.component.publicationDate | quote }}
+    status: specified
+    version: {{ .Values.component.version }}
+    description: "OpenAN Orchestration Center: PSOP workflow generation, retrieval and execution."
+    maintainers:
+    - name: OpenAN
+      email: openan@example.invalid
+    owners:
+    - name: OpenAN
+      email: openan@example.invalid
+  coreFunction:
+    exposedAPIs:
+    - name: orchestration
+      specification:
+      - url: "http://{{ include "oc.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.specPort }}/orchestration-center.yaml"
+      implementation: {{ include "oc.fullname" . }}
+      apiType: openapi
+      path: /{{ include "oc.componentName" . }}/rest/v1/orchestrate
+      port: {{ .Values.port }}
+      gatewayConfiguration:
+        apiKeyVerification: {{ .Values.component.apipolicy.apiKeyVerification | toYaml | nindent 10 }}
+        rateLimit: {{ .Values.component.apipolicy.rateLimit | toYaml | nindent 10 }}
+        quota: {{ .Values.component.apipolicy.quota | toYaml | nindent 10 }}
+        OASValidation: {{ .Values.component.apipolicy.OASValidation | toYaml | nindent 10 }}
+        CORS: {{ .Values.component.apipolicy.CORS | toYaml | nindent 10 }}
+        template: {{ .Values.component.apipolicy.template | quote }}
+    dependentAPIs: []
+  eventNotification:
+    publishedEvents: []
+    subscribedEvents: []
+  managementFunction:
+    exposedAPIs: []
+  securityFunction:
+    canvasSystemRole: {{ .Values.security.canvasSystemRole | quote }}
+    exposedAPIs: []

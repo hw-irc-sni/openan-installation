@@ -1,0 +1,111 @@
+openapi: 3.0.3
+info:
+  title: OpenAN Registry Center API
+  version: 1.0.0
+  description: Agent Card registry (A2A). Hand-authored from "Registry Center API Reference".
+servers:
+- url: /rest/v1/registry-center
+security:
+- bearerAuth: []
+paths:
+  /agent-cards:
+    get:
+      summary: List agent cards
+      parameters:
+      - {name: name, in: query, schema: {type: string}, description: Substring match}
+      - {name: organization, in: query, schema: {type: string}, description: Exact match}
+      responses: {"200": {description: Agent cards}}
+    post:
+      summary: Register agent cards (fail-fast batch)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentCardBatch'}
+      responses:
+        "201": {description: Registered}
+        "401": {description: Missing or invalid signature or token}
+        "409": {description: Card already exists}
+        "422": {description: Validation failure}
+  /agent-cards/{organization}/{name}:
+    parameters:
+    - {name: organization, in: path, required: true, schema: {type: string}}
+    - {name: name, in: path, required: true, schema: {type: string}}
+    get:
+      summary: Get one agent card
+      responses: {"200": {description: Agent card}, "404": {description: Not found}}
+    put:
+      summary: Replace an agent card (owner only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AgentCardBatch'}
+      responses: {"200": {description: Updated}, "422": {description: Name or organization mismatch}}
+    delete:
+      summary: Delete an agent card (owner only)
+      responses: {"200": {description: Deleted}, "404": {description: Not found}}
+  /agent-cards/semantic-query:
+    post:
+      summary: Semantic agent search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task]
+              properties:
+                task: {type: string}
+                topN: {type: integer}
+      responses: {"200": {description: Ranked agent cards}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  schemas:
+    AgentCardBatch:
+      type: object
+      required: [agentCards]
+      properties:
+        agentCards:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/AgentCard'}
+    AgentCard:
+      type: object
+      required: [name, description, version, provider, skills, capabilities, supportedInterfaces]
+      properties:
+        name: {type: string, maxLength: 100}
+        description: {type: string, maxLength: 1000}
+        version: {type: string, maxLength: 50}
+        provider:
+          type: object
+          required: [organization]
+          properties:
+            organization: {type: string, maxLength: 100}
+            url: {type: string}
+        capabilities: {type: object}
+        supportedInterfaces:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items:
+            type: object
+            required: [url, protocolBinding, protocolVersion]
+            properties:
+              url: {type: string}
+              protocolBinding: {type: string}
+              protocolVersion: {type: string}
+        skills:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required: [id, name, description]
+            properties:
+              id: {type: string}
+              name: {type: string}
+              description: {type: string}
+        defaultInputModes: {type: array, items: {type: string}}
+        defaultOutputModes: {type: array, items: {type: string}}
+        signatures: {type: array, items: {type: object}}

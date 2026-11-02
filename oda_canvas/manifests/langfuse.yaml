@@ -1,0 +1,243 @@
+# Langfuse v3 self-hosted (https://langfuse.com/self-hosting/deployment/kubernetes-helm, component set from
+# the docker-compose deployment): web + worker, Postgres, ClickHouse (single node), Redis, MinIO (S3).
+# Dev/demo sizing, single replicas. Rendered with envsubst (explicit variable list, see Makefile).
+# Secrets are NOT in this file: Secret langfuse-secrets (random, generated once by `make observability`)
+# and Secret langfuse-init (initial admin user, password from config.env).
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-web, namespace: "${OBS_NS}", labels: {app: langfuse-web}}
+spec:
+  selector: {app: langfuse-web}
+  ports: [{name: http, port: 3000, targetPort: 3000}]   # first port is the one the portal health-checks
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-web, namespace: "${OBS_NS}"}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-web}}
+  template:
+    metadata: {labels: {app: langfuse-web}}
+    spec:
+      initContainers:   # Postgres/ClickHouse start in parallel: wait instead of crashing once on the DB migration
+        - name: wait-for-deps
+          image: busybox:1.35
+          command: ["sh", "-c", "for h in langfuse-postgres:5432 langfuse-clickhouse:8123 langfuse-redis:6379; do until nc -z -w2 ${h%:*} ${h#*:}; do echo waiting for $h; sleep 2; done; done"]
+      containers:
+        - name: web
+          image: langfuse/langfuse:${LANGFUSE_IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 3000}]
+          envFrom: [{configMapRef: {name: langfuse-common}}]
+          env:
+            - {name: PG_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: postgres-password}}}
+            - {name: DATABASE_URL, value: "postgresql://langfuse:$(PG_PASSWORD)@langfuse-postgres:5432/langfuse"}
+            - {name: SALT, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: salt}}}
+            - {name: ENCRYPTION_KEY, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: encryption-key}}}
+            - {name: NEXTAUTH_SECRET, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: nextauth-secret}}}
+            - {name: CLICKHOUSE_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: clickhouse-password}}}
+            - {name: REDIS_AUTH, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: redis-password}}}
+            - {name: MINIO_SECRET, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: minio-password}}}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY, value: "$(MINIO_SECRET)"}
+            - {name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY, value: "$(MINIO_SECRET)"}
+            - {name: LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY, value: "$(MINIO_SECRET)"}
+            - {name: LANGFUSE_INIT_USER_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-init, key: user-password}}}
+            - {name: NEXTAUTH_URL, value: "http://localhost:${LANGFUSE_LOCAL_PORT}"}
+            - {name: LANGFUSE_INIT_ORG_ID, value: "${LANGFUSE_INIT_ORG}"}
+            - {name: LANGFUSE_INIT_ORG_NAME, value: "${LANGFUSE_INIT_ORG}"}
+            - {name: LANGFUSE_INIT_PROJECT_ID, value: "${LANGFUSE_INIT_PROJECT}"}
+            - {name: LANGFUSE_INIT_PROJECT_NAME, value: "${LANGFUSE_INIT_PROJECT}"}
+            - {name: LANGFUSE_INIT_USER_EMAIL, value: "${LANGFUSE_INIT_USER_EMAIL}"}
+            - {name: LANGFUSE_INIT_USER_NAME, value: "admin"}
+          startupProbe:   # first start runs the Postgres + ClickHouse migrations
+            httpGet: {path: /api/public/health, port: 3000}
+            periodSeconds: 5
+            failureThreshold: 90
+          readinessProbe: {httpGet: {path: /api/public/ready, port: 3000}, periodSeconds: 10}
+          resources: {requests: {cpu: 100m, memory: 512Mi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-worker, namespace: "${OBS_NS}"}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-worker}}
+  template:
+    metadata: {labels: {app: langfuse-worker}}
+    spec:
+      initContainers:   # Postgres/ClickHouse start in parallel: wait instead of crashing once on the DB migration
+        - name: wait-for-deps
+          image: busybox:1.35
+          command: ["sh", "-c", "for h in langfuse-postgres:5432 langfuse-clickhouse:8123 langfuse-redis:6379; do until nc -z -w2 ${h%:*} ${h#*:}; do echo waiting for $h; sleep 2; done; done"]
+      containers:
+        - name: worker
+          image: langfuse/langfuse-worker:${LANGFUSE_IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 3030}]
+          envFrom: [{configMapRef: {name: langfuse-common}}]
+          env:
+            - {name: PG_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: postgres-password}}}
+            - {name: DATABASE_URL, value: "postgresql://langfuse:$(PG_PASSWORD)@langfuse-postgres:5432/langfuse"}
+            - {name: SALT, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: salt}}}
+            - {name: ENCRYPTION_KEY, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: encryption-key}}}
+            - {name: CLICKHOUSE_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: clickhouse-password}}}
+            - {name: REDIS_AUTH, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: redis-password}}}
+            - {name: MINIO_SECRET, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: minio-password}}}
+            - {name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY, value: "$(MINIO_SECRET)"}
+            - {name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY, value: "$(MINIO_SECRET)"}
+            - {name: LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY, value: "$(MINIO_SECRET)"}
+          readinessProbe: {httpGet: {path: /api/health, port: 3030}, periodSeconds: 10, failureThreshold: 30}
+          resources: {requests: {cpu: 100m, memory: 256Mi}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: langfuse-common, namespace: "${OBS_NS}"}
+data:
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+  CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: langfuse-redis
+  REDIS_PORT: "6379"
+  LANGFUSE_USE_AZURE_BLOB: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+  LANGFUSE_S3_BATCH_EXPORT_BUCKET: langfuse
+  LANGFUSE_S3_BATCH_EXPORT_REGION: auto
+  LANGFUSE_S3_BATCH_EXPORT_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_BATCH_EXPORT_ENDPOINT: http://langfuse-minio:9000
+  LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: "true"
+---
+# ---- Postgres ----
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-postgres, namespace: "${OBS_NS}"}
+spec: {selector: {app: langfuse-postgres}, ports: [{port: 5432}]}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: langfuse-postgres, namespace: "${OBS_NS}"}
+spec:
+  serviceName: langfuse-postgres
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-postgres}}
+  template:
+    metadata: {labels: {app: langfuse-postgres}}
+    spec:
+      containers:
+        - name: postgres
+          image: ${LANGFUSE_POSTGRES_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 5432}]
+          env:
+            - {name: POSTGRES_USER, value: langfuse}
+            - {name: POSTGRES_DB, value: langfuse}
+            - {name: POSTGRES_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: postgres-password}}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          readinessProbe: {exec: {command: [pg_isready, -U, langfuse]}, periodSeconds: 5}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 2Gi}}}
+---
+# ---- ClickHouse (single node) ----
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-clickhouse, namespace: "${OBS_NS}"}
+spec:
+  selector: {app: langfuse-clickhouse}
+  ports: [{name: http, port: 8123}, {name: native, port: 9000}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: langfuse-clickhouse, namespace: "${OBS_NS}"}
+spec:
+  serviceName: langfuse-clickhouse
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-clickhouse}}
+  template:
+    metadata: {labels: {app: langfuse-clickhouse}}
+    spec:
+      containers:
+        - name: clickhouse
+          image: ${LANGFUSE_CLICKHOUSE_IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8123}, {containerPort: 9000}]
+          env:
+            - {name: CLICKHOUSE_DB, value: default}
+            - {name: CLICKHOUSE_USER, value: clickhouse}
+            - {name: CLICKHOUSE_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: clickhouse-password}}}
+          readinessProbe: {httpGet: {path: /ping, port: 8123}, periodSeconds: 5}
+          resources: {requests: {cpu: 100m, memory: 512Mi}}
+          volumeMounts: [{name: data, mountPath: /var/lib/clickhouse}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 5Gi}}}
+---
+# ---- Redis ----
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-redis, namespace: "${OBS_NS}"}
+spec: {selector: {app: langfuse-redis}, ports: [{port: 6379}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: langfuse-redis, namespace: "${OBS_NS}"}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-redis}}
+  template:
+    metadata: {labels: {app: langfuse-redis}}
+    spec:
+      containers:
+        - name: redis
+          image: ${LANGFUSE_REDIS_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: [sh, -c, 'exec redis-server --requirepass "$REDIS_AUTH" --maxmemory-policy noeviction']
+          env: [{name: REDIS_AUTH, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: redis-password}}}]
+          ports: [{containerPort: 6379}]
+          readinessProbe: {exec: {command: [sh, -c, 'redis-cli -a "$REDIS_AUTH" ping | grep -q PONG']}, periodSeconds: 5}
+---
+# ---- MinIO (S3 for events/media; the bucket "langfuse" is created by the start command) ----
+apiVersion: v1
+kind: Service
+metadata: {name: langfuse-minio, namespace: "${OBS_NS}"}
+spec: {selector: {app: langfuse-minio}, ports: [{port: 9000}]}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: langfuse-minio, namespace: "${OBS_NS}"}
+spec:
+  serviceName: langfuse-minio
+  replicas: 1
+  selector: {matchLabels: {app: langfuse-minio}}
+  template:
+    metadata: {labels: {app: langfuse-minio}}
+    spec:
+      securityContext: {fsGroup: 1001}
+      containers:
+        - name: minio
+          image: ${LANGFUSE_MINIO_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: [sh, -c, 'mkdir -p /bitnami/minio/data/langfuse && exec minio server --address ":9000" /bitnami/minio/data']
+          env:
+            - {name: MINIO_ROOT_USER, value: minio}
+            - {name: MINIO_ROOT_PASSWORD, valueFrom: {secretKeyRef: {name: langfuse-secrets, key: minio-password}}}
+          ports: [{containerPort: 9000}]
+          readinessProbe: {httpGet: {path: /minio/health/ready, port: 9000}, periodSeconds: 5}
+          volumeMounts: [{name: data, mountPath: /bitnami/minio/data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 2Gi}}}

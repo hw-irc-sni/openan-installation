@@ -1,0 +1,17 @@
+component:
+  id: OPENAN-FE
+  name: frontend
+  functionalBlock: AIAgentPortal
+  publicationDate: "2026-11-01T00:00:00.000Z"
+  version: 0.1.0
+security:
+  canvasSystemRole: canvasRole
+image:
+  repository: ghcr.io/project-openan/openan-portal
+  tag: ""   # REQUIRED
+  pullPolicy: IfNotPresent
+port: 8080
+replicas: 1
+backendUrl: ""    # Orchestration Center base URL (required)
+registryUrl: ""   # Registry Center base URL (required)
+resources: {}

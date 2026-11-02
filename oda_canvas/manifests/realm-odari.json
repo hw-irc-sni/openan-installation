@@ -1,0 +1,48 @@
+{
+  "realm": "${KC_REALM}",
+  "enabled": true,
+  "registrationAllowed": false,
+  "groups": [{"name": "canvas-admin"}],
+  "clients": [
+    {
+      "clientId": "canvas-portal",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "redirectUris": ["http://localhost:${LOCAL_PORT}/*"],
+      "webOrigins": ["http://localhost:${LOCAL_PORT}"],
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {"claim.name": "groups", "full.path": "true",
+                     "id.token.claim": "true", "access.token.claim": "true",
+                     "userinfo.token.claim": "true"}
+        }
+      ]
+    },
+    {
+      "clientId": "canvas-portal-admin",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${PORTAL_ADMIN_CLIENT_SECRET}"
+    }
+  ],
+  "users": [
+    {
+      "username": "${PORTAL_USER}",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "${PORTAL_USER}@example.com",
+      "firstName": "Portal",
+      "lastName": "Admin",
+      "groups": ["canvas-admin"],
+      "credentials": [{"type": "password", "value": "${PORTAL_USER_PASSWORD}", "temporary": false}]
+    }
+  ]
+}
