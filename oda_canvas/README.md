@@ -121,6 +121,41 @@ for example, with `kubectl -n components port-forward svc/pc-prodcatapi 18080:80
 `sum by (NotificationEvent) (pc_productcatalogmanagement_api_counter)` (`make oda-canvas-port-forward`, Prometheus on
 `localhost:$(PROMETHEUS_LOCAL_PORT)`).
 
+## Reference timings
+
+One measured run of `make down && make bootstrap-oda-canvas INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443` (2026-11-02,
+Linux host, kind cluster `oda-canvas`). The forwards were listening 25 min 25 s after `make down` started. Treat the numbers as an
+order of magnitude: they depend on network speed and on which images are already in the local Docker cache.
+
+| Stage / target | Time | Notes |
+|---|---|---|
+| `make down` | 37.0 s | deletes the kind cluster |
+| **`environment`** | **2 m 30 s** | |
+| ↳ `preflight` | 1.2 s | |
+| ↳ `cluster` | 48.3 s | kind create |
+| ↳ `deps` | 29.2 s | |
+| ↳ `istio` | 62.8 s | |
+| ↳ `ingress-address`, `gateway-api-crds`, `vault-prepare`, `permissions` | 0.6 s, 2.9 s, 1.5 s, 3.6 s | |
+| **`oda-canvas`** | **6 m 40 s** | |
+| ↳ `deps` | 27.5 s | |
+| ↳ image preload, Helm install and waits | 6 m 08 s | the longest stage |
+| ↳ `canvas-verify` | 2.9 s | |
+| **`observability`** | **5 m 05 s** | includes `deps` (28 s) |
+| **`canvas-portal`** | **1 m 44 s** | |
+| ↳ `images` | 72.5 s | |
+| ↳ `portal-realm` | 3.6 s | |
+| ↳ `portal` | 24.4 s | |
+| ↳ `verify` | 3.3 s | |
+| **`component-sample`** | **8 m 08 s** | |
+| ↳ pull and load images, Helm install | 7 m 06 s | |
+| ↳ `component-verify` | 41.5 s | Complete on the 5th poll |
+| **`oda-canvas-port-forward`** | 0.6 s to listening | services exposed |
+| **Bootstrap total (to forwards up)** | **24 m 48 s** | |
+| **Total including `make down`** | **25 m 25 s** | |
+
+`component-sample` and `oda-canvas` are about 59% of the total, mostly image pulls, loading them into kind and the
+Helm waits.
+
 ## Design notes
 
 - Portal Services are `ClusterIP` (the chart has no nodePort setting), so access is by `port-forward`.
