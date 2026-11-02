@@ -84,3 +84,10 @@ OPENAN_OC_TAG=src
 OPENAN_OC_SRC=../../orchestration-center
 # The portal is built from its release tarball (containerized/build/portal).
 OPENAN_FE_TAG=v1.0.0
+# OpenAN Orchestration Center chat model (models.yaml): an OpenAI-compatible endpoint reachable from the kind pods
+# (use the host's LAN address, not localhost). No API key is configured.
+OPENAN_LLM_BASE_URL=http://10.220.239.55:50343/v1
+OPENAN_LLM_URL=$(OPENAN_LLM_BASE_URL)/chat/completions
+OPENAN_LLM_MODEL=Qwen/Qwen3.8-27B-FP8
+# Sample-A2A-T-Agent image (built from ./sample-agent and loaded into kind)
+OPENAN_SAMPLE_AGENT_IMAGE=openan-sample-a2a-t-agent:0.1.0

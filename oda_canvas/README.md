@@ -204,11 +204,32 @@ Components and publishes Canvas `a2a` ExposedAPIs as Agent Cards in the Registry
 ```bash
 make openan-operator-image   # build the operator image, pull RC/OC images, kind load them
 make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orchestration Center)
-make openan-sample           # sample a2a Component (loads its nginx image into kind first); waits until its card is in the Registry
+make openan-sample           # Sample-A2A-T-Agent: builds its image (sample-agent/), loads it into kind, deploys it; waits until its card is in the Registry
 ```
 
 Demo limits: Agent Cards are ES256-signed (`cardSync.signing.enabled: true` in `openan-cr.yaml.tpl`); the Registry verifies them with keys from the operator-maintained trust ConfigMap (`<cr>-registry-trust`), so no HTTPS `jku` endpoint is needed (the ConfigMap is created when the first a2a Agent Card is fetched, so it is absent until then, e.g. while `sample-agent` is in `ImagePullBackOff`). The Registry mounts it as optional, so the first publish can get `401 no valid signature with a trusted key` until the kubelet syncs the mount into the pod (about a minute); the operator retries and then succeeds. RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
 (`values.podSecurityContext`).
+
+### Sample-A2A-T-Agent
+
+`sample-agent/` is a small A2A + A2A-T agent that passes every message it receives to the LLM and replies with the answer
+(`OPENAN_LLM_BASE_URL` / `OPENAN_LLM_MODEL` in `config.mk`, an OpenAI-compatible endpoint reachable from the pods).
+
+- **A2A** (`a2a-sdk` 1.x): an `AgentExecutor` behind `DefaultRequestHandler` and a `TaskUpdater`
+  (submitted, working, artifact, completed/failed/rejected), JSON-RPC v1.0 with v0.3 compatibility, streaming
+  (`message/stream`) and blocking (`message/send`) calls, and the public Agent Card (also under the Istio gateway path).
+- **A2A-T** (`a2a-t-sdk`): the card declares the Task-T extension. When a client activates it (`A2A-Extensions` header) the
+  business prompt in the message metadata is checked with `A2ATServer.check_task_prompt` before it reaches the model; a
+  non-compliant prompt is `REJECTED`. Terminal status updates carry the `__sdk_event__` metadata that the Orchestration
+  Center's `/execute` reads to finish a run. Negotiation-T is not implemented.
+- **LLM**: the model's answer is the artifact and the final status message. Qwen-style reasoning models answer in a hidden
+  field unless thinking is off, so `LLM_ENABLE_THINKING` defaults to `false`; the A2A-T SDK's several leading `system`
+  messages are merged into one (strict chat templates reject them). The check itself needs the model, so a Task-T prompt
+  takes a while to validate.
+
+Try it through the Orchestration Center (any workflow id works; `target_agent` bypasses planning):
+`GET /rest/v1/orchestrate/execute?psop_id=<id>&target_agent=Sample-A2A-T-Agent&user_intent=<text>` streams a `complete`
+event whose `result` is the LLM answer.
 
 ### OpenAN portal access
 

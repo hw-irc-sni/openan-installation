@@ -18,6 +18,15 @@ spec:
   orchestrationCenter:
     values:
       image: {repository: ghcr.io/project-openan/orchestration-center, tag: "${OPENAN_OC_TAG}"}
+      orchestration:
+        modelsYaml: |
+          models:
+            chat:
+              provider: openai_compatible
+              model: ${OPENAN_LLM_MODEL}
+              url: ${OPENAN_LLM_URL}
+              timeout: 300
+              verify_ssl: true
   frontend:
     values:
       image: {repository: ghcr.io/project-openan/openan-portal, tag: "${OPENAN_FE_TAG}"}
