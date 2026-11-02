@@ -39,7 +39,7 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
 .PHONY: bootstrap-oda-canvas canvas-portal environment oda-canvas observability preflight check check-secrets check-portal \
         cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
-        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify
+        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify openan-clean
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -353,3 +353,28 @@ openan-verify:
 	for i in $$(seq 1 40); do \
 	  kubectl -n $(OPENAN_NS) exec deploy/openan-registry-center-registry-center -c registry-center -- python -c "import urllib.request as u;r=u.Request('http://127.0.0.1:5000/rest/v1/registry-center/agent-cards',headers={'Authorization':'Bearer $$TOKEN'});print(u.urlopen(r).read().decode())" 2>/dev/null | grep -q "Sample-A2A-T-Agent" && { echo "agent card registered"; exit 0; }; \
 	  sleep 15; done; echo "agent card NOT found in the Registry Center"; exit 1
+
+# Remove everything the openan-* targets created in the cluster, so a new OpenAN deployment can start from scratch. Order
+# matters: the operator must still run while the sample card and the OpenAN CR are deleted (its finalizers remove the
+# Registry card, uninstall the Registry/Orchestration/portal releases and delete their data PVCs).
+#   1. the detached port-forward           4. the OpenAN CR (-> the three component releases, PVCs, Secrets, trust ConfigMap)
+#   2. the portal route                    5. the operator release and the OpenAN CRD
+#   3. the sample agent Component          6. leftovers by label, then the `openan` Helm repo (client side, if present)
+# Not touched: the Canvas, the namespaces (components and the operator's namespace are shared with the Canvas), the
+# `pc` reference component, and local Docker images / images already loaded into kind (not Kubernetes resources).
+OPENAN_HELM_REPO := openan
+openan-clean:
+	-@$(PF) stop openan
+	kubectl delete -f manifests/openan/portal-virtualservice.yaml --ignore-not-found
+	kubectl delete -f manifests/openan/sample-a2a-agent.yaml.tpl --ignore-not-found --timeout=3m
+	@# The operator's finalizers do the teardown: without a running operator this wait times out instead of leaking releases.
+	kubectl -n $(OPENAN_NS) delete openan --all --ignore-not-found --timeout=5m \
+	  || { echo "ERROR: the OpenAN CR was not removed (is the operator running in $(OPENAN_OPERATOR_NS)?)"; exit 1; }
+	helm uninstall openan-operator -n $(OPENAN_OPERATOR_NS) --ignore-not-found
+	kubectl delete crd openans.openan.dev --ignore-not-found
+	@# Leftovers (e.g. data kept by retainData): generated Secrets/ConfigMaps and the component data PVCs.
+	kubectl -n $(OPENAN_NS) delete secret,configmap -l app.kubernetes.io/managed-by=openan-operator --ignore-not-found
+	kubectl -n $(OPENAN_NS) delete pvc -l 'app.kubernetes.io/instance in (openan-registry-center,openan-orchestration-center,openan-frontend)' --ignore-not-found
+	@if helm repo list 2>/dev/null | awk 'NR>1{print $$1}' | grep -qx '$(OPENAN_HELM_REPO)'; then \
+	  helm repo remove $(OPENAN_HELM_REPO); else echo "Helm repo $(OPENAN_HELM_REPO) not added"; fi
+	@echo "OpenAN removed. Start again with: make openan-operator-image openan-operator openan-portal-route openan-sample"
