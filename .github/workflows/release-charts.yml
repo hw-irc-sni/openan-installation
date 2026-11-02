@@ -23,6 +23,20 @@ jobs:
         run: |
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+      - name: Ensure the gh-pages branch exists
+        # chart-releaser publishes index.yaml to gh-pages and fails ("invalid reference: origin/gh-pages") if the
+        # branch is missing: create it (empty, orphan) on the first run.
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null; then
+            git fetch --no-tags --depth=1 origin gh-pages:refs/remotes/origin/gh-pages
+          else
+            git switch --orphan gh-pages
+            touch .nojekyll
+            git add .nojekyll
+            git commit -q -m "Initialize gh-pages for the Helm repository"
+            git push origin gh-pages
+            git switch --detach "$GITHUB_SHA"
+          fi
       - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
         with:
           version: v3.19.0
