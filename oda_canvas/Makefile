@@ -261,6 +261,7 @@ oda-canvas-port-forward: ingress-address
 	@h=$$(hostname -I 2>/dev/null | awk '{print $$1}'); h=$${h:-<host-ip>}; \
 	echo "Listening on $(FORWARD_ADDRESS); replace localhost with any host address (e.g. $$h)"; \
 	echo "Portal     http://localhost:$(LOCAL_PORT)    (login: $(PORTAL_USER) / PORTAL_USER_PASSWORD in config.env)"; \
+	echo "OpenAN     http://localhost:$(OPENAN_PORTAL_LOCAL_PORT)    (OpenAN portal, only if deployed: make openan-operator)"; \
 	echo "Grafana    http://localhost:$(GRAFANA_LOCAL_PORT)    (admin / GRAFANA_ADMIN_PASSWORD in config.env)"; \
 	echo "Prometheus http://localhost:$(PROMETHEUS_LOCAL_PORT)"; \
 	echo "Jaeger     http://localhost:$(JAEGER_LOCAL_PORT)"; \
@@ -268,6 +269,8 @@ oda-canvas-port-forward: ingress-address
 	echo "ExposedAPIs http://$(INGRESS_ADDRESS):$(INGRESS_HTTP_PORT) (https :$(INGRESS_HTTPS_PORT))"; \
 	trap 'kill 0' INT TERM EXIT; \
 	kubectl -n $(PORTAL_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(RELEASE)-frontend $(LOCAL_PORT):80 & \
+	{ kubectl -n $(COMPONENTS_NS) get svc openan-frontend-frontend >/dev/null 2>&1 && \
+	  kubectl -n $(COMPONENTS_NS) port-forward --address $(FORWARD_ADDRESS) svc/openan-frontend-frontend $(OPENAN_PORTAL_LOCAL_PORT):8080; } & \
 	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-grafana $(GRAFANA_LOCAL_PORT):80 & \
 	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-kube-prometheus-prometheus $(PROMETHEUS_LOCAL_PORT):9090 & \
 	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-jaeger-query $(JAEGER_LOCAL_PORT):16686 & \
