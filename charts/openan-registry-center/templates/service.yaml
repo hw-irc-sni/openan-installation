@@ -9,5 +9,5 @@ spec:
   selector:
     app: {{ include "rc.fullname" . }}
   ports:
-  - {name: http, port: {{ .Values.port }}, targetPort: {{ .Values.port }}, protocol: TCP}
-  - {name: spec, port: {{ .Values.specPort }}, targetPort: spec, protocol: TCP}
+  - {name: http, port: {{ int .Values.port }}, targetPort: {{ int .Values.port }}, protocol: TCP}
+  - {name: spec, port: {{ int .Values.specPort }}, targetPort: spec, protocol: TCP}

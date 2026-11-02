@@ -5,7 +5,7 @@ metadata:
   name: {{ include "fe.fullname" . }}
   labels: {{- include "fe.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: {{ int .Values.replicas }}
   selector:
     matchLabels:
       app: {{ include "fe.fullname" . }}
@@ -15,10 +15,10 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
         ports:
-        - {name: http, containerPort: {{ .Values.port }}}
+        - {name: http, containerPort: {{ int .Values.port }}}
         env:
         - {name: BACKEND_URL, value: {{ .Values.backendUrl | quote }}}
         - {name: REGISTRY_URL, value: {{ .Values.registryUrl | quote }}}

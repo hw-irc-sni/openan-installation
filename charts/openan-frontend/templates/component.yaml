@@ -10,12 +10,12 @@ metadata:
     oda.tmforum.org/componentName: {{ include "fe.componentName" . }}
 spec:
   componentMetadata:
-    id: {{ .Values.component.id }}
-    name: {{ .Values.component.name }}
-    functionalBlock: {{ .Values.component.functionalBlock }}
+    id: {{ .Values.component.id | quote }}
+    name: {{ .Values.component.name | quote }}
+    functionalBlock: {{ .Values.component.functionalBlock | quote }}
     publicationDate: {{ .Values.component.publicationDate | quote }}
     status: specified
-    version: {{ .Values.component.version }}
+    version: {{ .Values.component.version | quote }}
     description: "OpenAN portal: web UI for the Registry Center and Orchestration Center."
     maintainers:
     - name: OpenAN

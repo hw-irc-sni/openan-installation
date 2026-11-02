@@ -107,7 +107,7 @@ def test_upsert_creates_then_replaces_and_url_encodes():
 
 def test_upsert_conflict_race_falls_back_to_put_and_errors_surface():
     f = FakeRC(post_status=409); assert make(f).upsert(CARD) == "updated"
-    assert [c[0] for c in f.calls] == ["GET", "POST", "PUT"]
+    assert [c[0] for c in f.calls] == ["GET", "POST", "GET", "PUT"]  # the re-read after 409 re-checks ownership
     with pytest.raises(RegistryError):
         make(FakeRC(post_status=422)).upsert(CARD)
 
@@ -364,3 +364,64 @@ def test_extra_env_rejects_security_and_process_variables(name):
 def test_extra_env_still_allows_tuning_variables(name):
     stack.validate_values("registryCenter", {"registry": {"extraEnv": {name: "1"}}})
     stack.validate_values("orchestrationCenter", {"orchestration": {"extraEnv": {name: "1"}}})
+
+
+# ---- security review: value injection and the 409 race ----------------------------------------------------------
+OWNER_A = "ns/a/uid-a"
+OWNER_B = "ns/b/uid-b"
+
+
+def _owned(owner):
+    return {**CARD, "capabilities": {"extensions": [{"uri": cards.OWNER_EXT, "params": {"owner": owner}}]}}
+
+
+class RaceRC(FakeRC):
+    """GET says 'missing' first, POST answers 409, later GETs return a card owned by `rival`."""
+    def __init__(self, rival):
+        super().__init__(post_status=409)
+        self.rival, self.gets = rival, 0
+
+    def handler(self, req):
+        if req.method == "GET":
+            self.calls.append(("GET", req.url.raw_path.decode(), None))
+            self.gets += 1
+            return httpx.Response(404, json={}) if self.gets == 1 else httpx.Response(200, json=_owned(self.rival))
+        return super().handler(req)
+
+
+def test_upsert_409_race_rechecks_ownership_and_refuses_foreign_card():
+    f = RaceRC(OWNER_B)
+    with pytest.raises(cards.OwnershipError):
+        make(f).upsert(_owned(OWNER_A), owner=OWNER_A)
+    assert "PUT" not in [c[0] for c in f.calls]
+    f = RaceRC(OWNER_A)  # the winner of the race is us: replacing is fine
+    assert make(f).upsert(_owned(OWNER_A), owner=OWNER_A) == "updated"
+
+
+def test_upsert_refuses_foreign_existing_card_when_owner_given():
+    class Existing(FakeRC):
+        def handler(self, req):
+            if req.method == "GET":
+                return httpx.Response(200, json=_owned(OWNER_B))
+            return super().handler(req)
+    f = Existing()
+    with pytest.raises(cards.OwnershipError):
+        make(f).upsert(_owned(OWNER_A), owner=OWNER_A)
+    assert [c[0] for c in f.calls] == []
+
+
+@pytest.mark.parametrize("values", [
+    {"image": {"tag": 'x"\n  command: [evil]'}}, {"image": {"tag": "a b"}}, {"image": {"tag": ""}},
+    {"image": {"tag": "ok", "pullPolicy": "Always\nhostNetwork: true"}},
+    {"replicas": "1\nhostNetwork: true"}, {"replicas": True}, {"replicas": -1},
+    {"port": "5000, evil: 1"}, {"port": 0}, {"port": 70000}, {"specPort": "8080\n"},
+    {"component": {"name": "a\nkind: Evil"}}, {"component": {"version": "1.0 # x"}},
+])
+def test_validate_values_rejects_injection_prone_scalars(values):
+    with pytest.raises(stack.ValuesError):
+        stack.validate_values("frontend", values)
+
+
+def test_validate_values_accepts_normal_scalars():
+    stack.validate_values("frontend", {"image": {"tag": "v1.2.3-rc_1", "pullPolicy": "IfNotPresent"}, "replicas": 2,
+                                       "port": 8080, "specPort": 8081, "component": {"name": "openan-frontend", "version": "1.0.0"}})

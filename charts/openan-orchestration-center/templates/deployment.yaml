@@ -5,7 +5,7 @@ metadata:
   name: {{ include "oc.fullname" . }}
   labels: {{- include "oc.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: {{ int .Values.replicas }}
   strategy: {type: Recreate}
   selector:
     matchLabels:
@@ -20,19 +20,19 @@ spec:
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
       - name: prepare-runtime
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
         command: ["python", "-c", "from pathlib import Path; [Path('/runtime', p).mkdir(mode=0o770, exist_ok=True) for p in ('data', 'log')]"]
         securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
         volumeMounts:
         - {name: runtime, mountPath: /runtime}
       containers:
       - name: orchestration-center
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
         securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
         ports:
-        - {name: http, containerPort: {{ .Values.port }}}
+        - {name: http, containerPort: {{ int .Values.port }}}
         envFrom:
         - configMapRef: {name: {{ include "oc.fullname" . }}-config}
         - secretRef: {name: {{ .Values.runtimeSecret }}}
@@ -45,12 +45,12 @@ spec:
         - {name: models, mountPath: /opt/orchestration-center/etc/config/models.yaml, subPath: models.yaml, readOnly: true}
       - name: spec
         # Serves the hand-authored OpenAPI document; reuses the service image (python is always present).
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
-        command: ["python", "-m", "http.server", "{{ .Values.specPort }}", "--directory", "/spec"]
+        image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+        command: ["python", "-m", "http.server", {{ int .Values.specPort | toString | quote }}, "--directory", "/spec"]
         securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
         ports:
-        - {name: spec, containerPort: {{ .Values.specPort }}}
+        - {name: spec, containerPort: {{ int .Values.specPort }}}
         volumeMounts:
         - {name: openapi, mountPath: /spec, readOnly: true}
         resources: {requests: {cpu: 5m, memory: 16Mi}}
