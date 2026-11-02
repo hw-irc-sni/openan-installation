@@ -10,12 +10,12 @@ metadata:
     oda.tmforum.org/componentName: {{ include "oc.componentName" . }}
 spec:
   componentMetadata:
-    id: {{ .Values.component.id }}
-    name: {{ .Values.component.name }}
-    functionalBlock: {{ .Values.component.functionalBlock }}
+    id: {{ .Values.component.id | quote }}
+    name: {{ .Values.component.name | quote }}
+    functionalBlock: {{ .Values.component.functionalBlock | quote }}
     publicationDate: {{ .Values.component.publicationDate | quote }}
     status: specified
-    version: {{ .Values.component.version }}
+    version: {{ .Values.component.version | quote }}
     description: "OpenAN Orchestration Center: PSOP workflow generation, retrieval and execution."
     maintainers:
     - name: OpenAN
@@ -27,11 +27,11 @@ spec:
     exposedAPIs:
     - name: orchestration
       specification:
-      - url: "http://{{ include "oc.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.specPort }}/orchestration-center.yaml"
+      - url: "http://{{ include "oc.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ int .Values.specPort }}/orchestration-center.yaml"
       implementation: {{ include "oc.fullname" . }}
       apiType: openapi
       path: /{{ include "oc.componentName" . }}/rest/v1/orchestrate
-      port: {{ .Values.port }}
+      port: {{ int .Values.port }}
       gatewayConfiguration:
         apiKeyVerification: {{ .Values.component.apipolicy.apiKeyVerification | toYaml | nindent 10 }}
         rateLimit: {{ .Values.component.apipolicy.rateLimit | toYaml | nindent 10 }}
