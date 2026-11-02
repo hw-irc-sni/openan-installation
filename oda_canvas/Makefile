@@ -39,7 +39,7 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
 .PHONY: bootstrap-oda-canvas canvas-portal environment oda-canvas observability preflight check check-secrets check-portal \
         cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
-        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-sample openan-verify
+        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -328,8 +328,10 @@ openan-operator:
 	kubectl apply -f .rendered/openan-cr.yaml
 	kubectl -n $(OPENAN_NS) wait --for=condition=Ready openan/openan --timeout=10m
 
-# Portal on the Istio gateway at "/" (catch-all: apply after the ExposedAPI routes exist).
+# Portal on the Istio gateway at "/". Istio orders the VirtualServices of host "*" by creation time, so this catch-all must
+# be the newest: delete and re-create it (a plain apply keeps the old timestamp) whenever a Component's route is added.
 openan-portal-route:
+	kubectl delete -f manifests/openan/portal-virtualservice.yaml --ignore-not-found
 	kubectl apply -f manifests/openan/portal-virtualservice.yaml
 
 # Sample-A2A-T-Agent image (a2a-sdk + a2a-t-sdk, answers with the LLM): built by the Docker daemon (which honours its proxy
