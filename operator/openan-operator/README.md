@@ -65,6 +65,8 @@ sequenceDiagram
 - **Signing**: the Registry Center only accepts signed cards. The operator signs them (ES256) with the generated
   `-signing-key` Secret and publishes the public key in the trust ConfigMap `<cr>-registry-trust` that the Registry
   Center verifies against, so the kind demo needs no HTTPS `jku` endpoint (`spec.cardSync.signing.enabled: true`).
+  The ConfigMap is created by the first successful card fetch (before the card is published), so it does not exist
+  until an a2a ExposedAPI has been synced once; the Registry Center mounts it as optional and has no keys before that.
   Setting it to `false` disables signature validation in the Registry Center. Production should serve the keys from an
   HTTPS JWKS endpoint (`spec.cardSync.signing.jku`) with `REGISTRY_JWK_ALLOWLIST`.
 - **What a CR may set:** Helm `values` per component are merged over the generated ones, except the Secret

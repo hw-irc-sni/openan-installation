@@ -206,7 +206,7 @@ make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orch
 make openan-sample           # sample a2a Component; waits until its card is in the Registry
 ```
 
-Demo limits: Agent Cards are ES256-signed (`cardSync.signing.enabled: true` in `openan-cr.yaml.tpl`); the Registry verifies them with keys from the operator-maintained trust ConfigMap (`<cr>-registry-trust`), so no HTTPS `jku` endpoint is needed; RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
+Demo limits: Agent Cards are ES256-signed (`cardSync.signing.enabled: true` in `openan-cr.yaml.tpl`); the Registry verifies them with keys from the operator-maintained trust ConfigMap (`<cr>-registry-trust`), so no HTTPS `jku` endpoint is needed (the ConfigMap is created when the first a2a Agent Card is fetched, so it is absent until then, e.g. while `sample-agent` is in `ImagePullBackOff`); RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
 (`values.podSecurityContext`).
 
 ### OpenAN portal access
