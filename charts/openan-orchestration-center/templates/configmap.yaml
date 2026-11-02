@@ -1,0 +1,45 @@
+{{/* Copyright (c) 2026 Huawei Technologies Co., Ltd. All Rights Reserved. SPDX-License-Identifier: Apache-2.0 */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oc.fullname" . }}-config
+  labels: {{- include "oc.labels" . | nindent 4 }}
+data:
+  {{- $generated := dict
+    "ORCH_IP" "0.0.0.0"
+    "ORCH_PORT" (.Values.port | toString)
+    "ORCH_ENABLE_HTTPS" "false"
+    "ORCH_VERIFY_CLIENT" "false"
+    "ORCH_FORWARDED_ALLOW_IPS" "127.0.0.1"
+    "ORCH_EXTERNAL_AUTH_MODE" "user"
+    "ORCH_PUBLIC_SCHEME" "http"
+    "AGENT_REGISTRY_URL" (.Values.registryUrl | toString)
+    "PERSISTENCE_MODE" (.Values.orchestration.persistenceMode | toString)
+    "LLM_CONFIG_FILE" "/opt/orchestration-center/etc/config/models.yaml" }}
+  {{- /* Generated keys are merged last: an extraEnv entry can never override them. */}}
+  {{- $env := mergeOverwrite (deepCopy (default (dict) .Values.orchestration.extraEnv)) $generated }}
+  {{- range $k, $v := $env }}
+  {{ $k | quote }}: {{ $v | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oc.fullname" . }}-models
+  labels: {{- include "oc.labels" . | nindent 4 }}
+data:
+  models.yaml: |
+    {{- if .Values.orchestration.modelsYaml }}
+    {{- .Values.orchestration.modelsYaml | nindent 4 }}
+    {{- else }}
+    models: {}
+    {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oc.fullname" . }}-openapi
+  labels: {{- include "oc.labels" . | nindent 4 }}
+data:
+  orchestration-center.yaml: |
+    {{- .Files.Get "openapi/orchestration-center.yaml" | nindent 4 }}

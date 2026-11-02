@@ -1,0 +1,97 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "openan-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openan-operator.labels" . | nindent 4 }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "openan-operator.fullname" . }}-role
+  labels:
+    {{- include "openan-operator.labels" . | nindent 4 }}
+rules:
+  # Framework: kopf peering and CRD discovery
+  - apiGroups: [zalando.org]
+    resources: [clusterkopfpeerings, kopfpeerings]
+    verbs: [list, watch, patch, get]
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [list, watch, get]
+  # Framework: posting events
+  - apiGroups: [events.k8s.io, ""]
+    resources: [events]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list, watch, get]
+  # Everything that writes (Secrets, Helm-managed objects, the OpenAN CR, ExposedAPI annotations) is granted
+  # per monitored namespace below, not cluster-wide.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "openan-operator.fullname" . }}-rolebinding
+  labels:
+    {{- include "openan-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "openan-operator.fullname" . }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "openan-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- /* Namespaced grants: one Role + RoleBinding per concrete (non-wildcard) monitored namespace. */}}
+{{- range $ns := splitList "," .Values.deployment.monitoredNamespaces }}
+{{- $ns = trim $ns }}
+{{- if and $ns (not (contains "*" $ns)) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "openan-operator.fullname" $ }}-role
+  namespace: {{ $ns }}
+  labels:
+    {{- include "openan-operator.labels" $ | nindent 4 }}
+rules:
+  # Canvas resources: read Components, create/remove the Components the OpenAN charts render, annotate ExposedAPIs
+  - apiGroups: [oda.tmforum.org]
+    resources: [components, components/status]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [oda.tmforum.org]
+    resources: [exposedapis, exposedapis/status]
+    verbs: [list, watch, patch, get]
+  # The OpenAN CR
+  - apiGroups: [openan.dev]
+    resources: [openans, openans/status, openans/finalizers]
+    verbs: [list, watch, patch, get, update]
+  # Generated Secrets, Helm release storage and the objects of the three component charts
+  - apiGroups: [""]
+    resources: [secrets, configmaps, services, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "openan-operator.fullname" $ }}-rolebinding
+  namespace: {{ $ns }}
+  labels:
+    {{- include "openan-operator.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "openan-operator.fullname" $ }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "openan-operator.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

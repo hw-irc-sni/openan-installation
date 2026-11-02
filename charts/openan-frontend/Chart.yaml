@@ -1,0 +1,7 @@
+apiVersion: v2
+name: openan-frontend
+description: OpenAN portal packaged as an ODA Component (web UI, proxies to Registry and Orchestration Centers)
+type: application
+version: 0.1.0
+# version: 0.1.0 - Initial ODA Component packaging of the OpenAN portal
+appVersion: "v1"

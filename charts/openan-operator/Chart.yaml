@@ -1,0 +1,10 @@
+apiVersion: v2
+name: openan-operator
+description: A Helm chart to deploy the OpenAN operator on a running ODA Canvas
+
+type: application
+
+version: 0.1.0
+# version: 0.1.0 - initial version
+
+appVersion: "v1"

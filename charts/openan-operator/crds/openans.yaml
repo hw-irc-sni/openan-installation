@@ -1,0 +1,50 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: openans.openan.dev
+spec:
+  group: openan.dev
+  scope: Namespaced
+  names: {kind: OpenAN, listKind: OpenANList, plural: openans, singular: openan, shortNames: [openan]}
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    subresources: {status: {}}
+    additionalPrinterColumns:
+    - {name: Ready, type: string, jsonPath: ".status.conditions[?(@.type=='Ready')].status"}
+    - {name: Age, type: date, jsonPath: ".metadata.creationTimestamp"}
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              registryCenter: &component
+                type: object
+                properties:
+                  enabled: {type: boolean, default: true}
+                  values:
+                    type: object
+                    description: Helm values for the component chart. image.tag is required.
+                    x-kubernetes-preserve-unknown-fields: true
+              orchestrationCenter: *component
+              frontend: *component
+              registry:
+                type: object
+                properties:
+                  organization: {type: string, default: openan}
+              cardSync:
+                type: object
+                properties:
+                  enabled: {type: boolean, default: true}
+                  signing:
+                    type: object
+                    properties:
+                      enabled: {type: boolean, default: true}
+                      jku: {type: string, description: "HTTPS JWKS URL (host must be in the Registry jwk_allowlist)"}
+              retainData: {type: boolean, default: false}
+          status:
+            type: object
+            x-kubernetes-preserve-unknown-fields: true

@@ -1,0 +1,50 @@
+{{/* Copyright (c) 2026 Huawei Technologies Co., Ltd. All Rights Reserved. SPDX-License-Identifier: Apache-2.0 */}}
+{{- if not .Values.image.tag }}{{ fail "image.tag is required" }}{{- end }}
+{{- if not .Values.runtimeSecret }}{{ fail "runtimeSecret is required" }}{{- end }}
+{{- if not .Values.credentialSecret }}{{ fail "credentialSecret is required" }}{{- end }}
+apiVersion: oda.tmforum.org/v1
+kind: Component
+metadata:
+  name: {{ include "rc.componentName" . }}
+  labels:
+    oda.tmforum.org/componentName: {{ include "rc.componentName" . }}
+spec:
+  componentMetadata:
+    id: {{ .Values.component.id }}
+    name: {{ .Values.component.name }}
+    functionalBlock: {{ .Values.component.functionalBlock }}
+    publicationDate: {{ .Values.component.publicationDate | quote }}
+    status: specified
+    version: {{ .Values.component.version }}
+    description: "OpenAN Registry Center: registry and semantic search of signed A2A Agent Cards."
+    maintainers:
+    - name: OpenAN
+      email: openan@example.invalid
+    owners:
+    - name: OpenAN
+      email: openan@example.invalid
+  coreFunction:
+    exposedAPIs:
+    - name: agentregistry
+      specification:
+      - url: "http://{{ include "rc.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.specPort }}/registry-center.yaml"
+      implementation: {{ include "rc.fullname" . }}
+      apiType: openapi
+      path: /{{ include "rc.componentName" . }}/rest/v1/registry-center
+      port: {{ .Values.port }}
+      gatewayConfiguration:
+        apiKeyVerification: {{ .Values.component.apipolicy.apiKeyVerification | toYaml | nindent 10 }}
+        rateLimit: {{ .Values.component.apipolicy.rateLimit | toYaml | nindent 10 }}
+        quota: {{ .Values.component.apipolicy.quota | toYaml | nindent 10 }}
+        OASValidation: {{ .Values.component.apipolicy.OASValidation | toYaml | nindent 10 }}
+        CORS: {{ .Values.component.apipolicy.CORS | toYaml | nindent 10 }}
+        template: {{ .Values.component.apipolicy.template | quote }}
+    dependentAPIs: []
+  eventNotification:
+    publishedEvents: []
+    subscribedEvents: []
+  managementFunction:
+    exposedAPIs: []
+  securityFunction:
+    canvasSystemRole: {{ .Values.security.canvasSystemRole | quote }}
+    exposedAPIs: []

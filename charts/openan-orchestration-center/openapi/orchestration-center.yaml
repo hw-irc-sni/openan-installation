@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+  title: OpenAN Orchestration Center API
+  version: 1.0.0
+  description: Workflow generation, retrieval and execution. Hand-authored from "Orchestration Center API Reference".
+servers:
+- url: /rest/v1/orchestrate
+paths:
+  /auth/login:
+    post:
+      summary: Log in (session cookie)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: {type: string}
+                password: {type: string}
+      responses: {"200": {description: Session established}, "401": {description: Invalid credentials}}
+  /workflows:
+    get:
+      summary: List workflows
+      responses: {"200": {description: Workflows}}
+    post:
+      summary: Create a workflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses: {"201": {description: Created}}
+  /execute:
+    post:
+      summary: Execute a workflow (server-sent events)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object}
+      responses: {"200": {description: Event stream, content: {text/event-stream: {schema: {type: string}}}}}
+  /agent-cards:
+    get:
+      summary: Proxy to the registry agent cards
+      responses: {"200": {description: Agent cards}}
