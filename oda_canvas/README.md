@@ -77,7 +77,7 @@ make component-sample         # reference component must reach "Complete"
 # or all five in one go (slow: many images):
 make bootstrap-oda-canvas
 make oda-canvas-port-forward  # all UIs on every host IP (FORWARD_ADDRESS=0.0.0.0): portal :8080, Grafana :3001,
-                              # Prometheus :9090, Jaeger :16686, Langfuse :3002, ExposedAPIs :80/:443 (Ctrl-C to stop;
+                              # Prometheus :9090, Jaeger :16686, Langfuse :3002, OpenAN portal :8082, ExposedAPIs :80/:443 (Ctrl-C to stop;
                               # already the last step of bootstrap-oda-canvas)
 make status
 make down                     # delete the cluster
@@ -206,6 +206,33 @@ make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orch
 make openan-sample           # sample a2a Component; waits until its card is in the Registry
 ```
 
-Demo limits: card signing is off (the Registry only fetches keys over HTTPS from an allow-listed host); the
-frontend is disabled (no published `openan-portal` image); RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
+Demo limits: card signing is off (the Registry only fetches keys over HTTPS from an allow-listed host); RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
 (`values.podSecurityContext`).
+
+### OpenAN portal access
+
+The portal (`openan-frontend-frontend`, namespace `components`, image `openan-portal:$OPENAN_FE_TAG`) is the only OpenAN
+component with a web UI; the Registry and Orchestration Centers are REST APIs only. The kind cluster maps no host ports, so
+it is reached through a port-forward, in one of two ways:
+
+| Access | URL | How |
+|---|---|---|
+| Direct to the service | `http://<host>:8082/` (`OPENAN_PORTAL_LOCAL_PORT`) | `make oda-canvas-port-forward` (skipped if the portal is not deployed), or `kubectl -n components port-forward --address 0.0.0.0 svc/openan-frontend-frontend 8082:8080` |
+| Through the Istio gateway | `https://<host>:8443/` | `make openan-portal-route` once, then `make oda-canvas-port-forward INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443` |
+
+`<host>` is `localhost` or any host address (the forwards listen on `FORWARD_ADDRESS`, default `0.0.0.0`). The gateway
+serves a self-signed certificate (`curl -k`), and plain HTTP on the gateway redirects to HTTPS on port 443, so open the
+HTTPS URL directly when using non-default ports.
+
+`manifests/openan/portal-virtualservice.yaml` routes `/` on `canvas/component-gateway` to the portal. It is a catch-all
+because the portal's nginx uses absolute paths (`/api/orchestrate`, `/assets`) and cannot sit under a prefix. Istio merges
+VirtualServices of host `*` in creation order, so it must be created after the ExposedAPI routes: if a Component is
+recreated, its route lands behind `/` and is shadowed until `make openan-portal-route` is run again.
+
+Login: the Orchestration Center's own user accounts (not Keycloak). The admin account is seeded only when the users
+table is empty, with the password from `OC_ADMIN_INITIAL_PASSWORD` in the `openan-orchestration-runtime` Secret:
+
+```bash
+kubectl -n components get secret openan-orchestration-runtime -o jsonpath='{.data.OC_ADMIN_INITIAL_PASSWORD}' | base64 -d
+```
+
