@@ -37,9 +37,9 @@ HELM_FORCE := $(if $(filter 4,$(HELM_MAJOR)),--force-conflicts,)
 INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo ip || echo hostname)
 
 .PHONY: bootstrap-oda-canvas canvas-portal environment oda-canvas observability preflight check check-secrets check-portal \
-        cluster repos deps istio ingress-address ingress-forward gateway-api-crds vault-prepare permissions \
-        canvas oda-canvas canvas-verify observability-forward images portal-realm portal verify component-sample component-verify \
-        port-forward status down openan-operator-image openan-operator openan-sample openan-verify
+        cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
+        canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
+        oda-canvas-port-forward status down openan-operator-image openan-operator openan-sample openan-verify
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -49,8 +49,8 @@ bootstrap-oda-canvas: check-secrets check-portal
 	$(MAKE) canvas-portal
 	$(MAKE) component-sample
 	@echo; echo "ODA Canvas, observability stack, portal and sample component ready."
-	@echo "Run 'make port-forward' then open http://localhost:$(LOCAL_PORT)  (login: $(PORTAL_USER) / PORTAL_USER_PASSWORD in config.env)"
-	@echo "Also: 'make status', 'make observability-forward', 'make ingress-forward'."
+	@echo "Also: 'make status'. Forwarding all the UIs now (Ctrl-C stops the forwards; rerun with 'make oda-canvas-port-forward')."
+	$(MAKE) oda-canvas-port-forward
 
 # ---- 1. environment: README "Environment installation" 1.-4. ------------------------------------------
 environment:
@@ -108,14 +108,6 @@ istio: repos
 ingress-address:
 	kubectl patch svc istio-ingress -n istio-ingress --subresource=status --type=merge \
 	  -p '{"status":{"loadBalancer":{"ingress":[{"$(INGRESS_KEY)":"$(INGRESS_ADDRESS)"}]}}}'
-
-# Make the published API URLs reachable from this machine (Ctrl-C stops it). For the conformance CTK containers use
-# an address they can reach: make ingress-forward INGRESS_ADDRESS=172.17.0.1 INGRESS_FORWARD_ADDRESS=0.0.0.0
-# (Docker Desktop: INGRESS_ADDRESS=host.docker.internal). Ports < 1024 may need privileges: INGRESS_HTTP_PORT=8081.
-ingress-forward: ingress-address
-	@echo "ExposedAPIs at http://$(INGRESS_ADDRESS):$(INGRESS_HTTP_PORT) (listening on $(INGRESS_FORWARD_ADDRESS))"
-	kubectl -n istio-ingress port-forward --address $(INGRESS_FORWARD_ADDRESS) svc/istio-ingress \
-	  $(INGRESS_HTTP_PORT):80 $(INGRESS_HTTPS_PORT):443
 
 # Gateway API CRDs: not needed by Istio here, but the portal's gateway inventory lists HTTPRoutes.
 gateway-api-crds:
@@ -206,20 +198,7 @@ observability:
 	kubectl -n $(OBS_NS) rollout status statefulset/langfuse-postgres statefulset/langfuse-clickhouse statefulset/langfuse-minio deploy/langfuse-redis --timeout=10m
 	kubectl -n $(OBS_NS) rollout status deploy/langfuse-web deploy/langfuse-worker --timeout=10m
 	@kubectl -n $(OBS_NS) get pods
-	@echo "Traces: components send OTLP/HTTP to http://$(OBS_RELEASE)-opentelemetry-collector.$(OBS_NS).svc.cluster.local:4318/v1/traces (Jaeger UI: make observability-forward)"
-
-# Local access to the UIs (Ctrl-C stops all of them).
-observability-forward:
-	@echo "Grafana    http://localhost:$(GRAFANA_LOCAL_PORT)    (admin / GRAFANA_ADMIN_PASSWORD in config.env)"
-	@echo "Prometheus http://localhost:$(PROMETHEUS_LOCAL_PORT)"
-	@echo "Jaeger     http://localhost:$(JAEGER_LOCAL_PORT)"
-	@echo "Langfuse   http://localhost:$(LANGFUSE_LOCAL_PORT)    ($(LANGFUSE_INIT_USER_EMAIL) / LANGFUSE_INIT_USER_PASSWORD in config.env)"
-	@trap 'kill 0' INT TERM EXIT; \
-	kubectl -n $(OBS_NS) port-forward svc/$(OBS_RELEASE)-grafana $(GRAFANA_LOCAL_PORT):80 & \
-	kubectl -n $(OBS_NS) port-forward svc/$(OBS_RELEASE)-kube-prometheus-prometheus $(PROMETHEUS_LOCAL_PORT):9090 & \
-	kubectl -n $(OBS_NS) port-forward svc/$(OBS_RELEASE)-jaeger-query $(JAEGER_LOCAL_PORT):16686 & \
-	kubectl -n $(OBS_NS) port-forward svc/langfuse-web $(LANGFUSE_LOCAL_PORT):3000 & \
-	wait
+	@echo "Traces: components send OTLP/HTTP to http://$(OBS_RELEASE)-opentelemetry-collector.$(OBS_NS).svc.cluster.local:4318/v1/traces (Jaeger UI: make oda-canvas-port-forward)"
 
 # ---- 4. canvas-portal: canvas-portal-v2 on top of the Canvas Keycloak ---------------------------------------------------------------------
 # Portal images, realm setup, Helm release, health checks (needs the Canvas and the observability stack).
@@ -275,8 +254,26 @@ component-verify:
 	  echo "component status: $${st:-none yet} ($$i/60)"; sleep 10; done; \
 	  kubectl -n components get components,exposedapis; echo "components did not all reach Complete"; exit 1
 
-port-forward:
-	kubectl -n $(PORTAL_NS) port-forward svc/$(RELEASE)-frontend $(LOCAL_PORT):80
+# Every UI of the demo on FORWARD_ADDRESS (default 0.0.0.0: any IP of this host). Ctrl-C stops all the forwards.
+# Ingress ports < 1024 may need privileges: INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443. For the conformance CTK
+# containers use an address they can reach: INGRESS_ADDRESS=172.17.0.1 (Docker Desktop: host.docker.internal).
+oda-canvas-port-forward: ingress-address
+	@h=$$(hostname -I 2>/dev/null | awk '{print $$1}'); h=$${h:-<host-ip>}; \
+	echo "Listening on $(FORWARD_ADDRESS); replace localhost with any host address (e.g. $$h)"; \
+	echo "Portal     http://localhost:$(LOCAL_PORT)    (login: $(PORTAL_USER) / PORTAL_USER_PASSWORD in config.env)"; \
+	echo "Grafana    http://localhost:$(GRAFANA_LOCAL_PORT)    (admin / GRAFANA_ADMIN_PASSWORD in config.env)"; \
+	echo "Prometheus http://localhost:$(PROMETHEUS_LOCAL_PORT)"; \
+	echo "Jaeger     http://localhost:$(JAEGER_LOCAL_PORT)"; \
+	echo "Langfuse   http://localhost:$(LANGFUSE_LOCAL_PORT)    ($(LANGFUSE_INIT_USER_EMAIL) / LANGFUSE_INIT_USER_PASSWORD in config.env)"; \
+	echo "ExposedAPIs http://$(INGRESS_ADDRESS):$(INGRESS_HTTP_PORT) (https :$(INGRESS_HTTPS_PORT))"; \
+	trap 'kill 0' INT TERM EXIT; \
+	kubectl -n $(PORTAL_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(RELEASE)-frontend $(LOCAL_PORT):80 & \
+	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-grafana $(GRAFANA_LOCAL_PORT):80 & \
+	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-kube-prometheus-prometheus $(PROMETHEUS_LOCAL_PORT):9090 & \
+	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/$(OBS_RELEASE)-jaeger-query $(JAEGER_LOCAL_PORT):16686 & \
+	kubectl -n $(OBS_NS) port-forward --address $(FORWARD_ADDRESS) svc/langfuse-web $(LANGFUSE_LOCAL_PORT):3000 & \
+	kubectl -n istio-ingress port-forward --address $(FORWARD_ADDRESS) svc/istio-ingress $(INGRESS_HTTP_PORT):80 $(INGRESS_HTTPS_PORT):443 & \
+	wait
 
 status:
 	@kubectl get pods -A | grep -E "$(PORTAL_NS)|$(CANVAS_NS)|$(COMPONENTS_NS)|$(OBS_NS)|istio|NAMESPACE"

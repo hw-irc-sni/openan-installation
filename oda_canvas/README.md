@@ -52,7 +52,7 @@ The Canvas must be in the namespace `canvas`: the portal detects the gateway typ
   scrapes the metrics of every deployed component.
 - **Tracing**: components can send OTLP/HTTP to
   `http://monitoring-opentelemetry-collector.monitoring.svc.cluster.local:4318/v1/traces`; traces show in Jaeger
-  (`make observability-forward`).
+  (`make oda-canvas-port-forward`).
 - Random Langfuse secrets are generated into the cluster Secret `langfuse-secrets` (never in git).
 - **Upgrading an older cluster**: earlier versions installed a plain `kube-prometheus-stack` as release `monitoring`.
   `make observability` stops with the command to remove it (`helm uninstall monitoring -n monitoring`) because
@@ -76,9 +76,9 @@ make canvas-portal            # canvas-portal-v2 on the Canvas Keycloak
 make component-sample         # reference component must reach "Complete"
 # or all five in one go (slow: many images):
 make bootstrap-oda-canvas
-make port-forward             # http://localhost:8080 (Ctrl-C to stop)
-make observability-forward    # Grafana :3001, Prometheus :9090, Jaeger :16686, Langfuse :3002 (Ctrl-C to stop)
-make ingress-forward          # ExposedAPI URLs on this machine (see below)
+make oda-canvas-port-forward  # all UIs on every host IP (FORWARD_ADDRESS=0.0.0.0): portal :8080, Grafana :3001,
+                              # Prometheus :9090, Jaeger :16686, Langfuse :3002, ExposedAPIs :80/:443 (Ctrl-C to stop;
+                              # already the last step of bootstrap-oda-canvas)
 make status
 make down                     # delete the cluster
 ```
@@ -95,13 +95,13 @@ e.g. `make canvas-portal PORTAL_BUILD=false` to pull
 
 `make environment` gives `istio-ingress` the address `INGRESS_ADDRESS` (default `127.0.0.1`) so the ExposedAPI URLs are
 populated; this must happen before components are installed (Canvas issue #621) and the patch is lost if the Service is
-recreated: `make ingress-address` re-applies it. The URLs are reachable only while `make ingress-forward` runs
+recreated: `make ingress-address` re-applies it. The URLs are reachable only while `make oda-canvas-port-forward` runs
 (ports `INGRESS_HTTP_PORT`/`INGRESS_HTTPS_PORT`, default 80/443, so privileges or other ports may be needed:
-`make ingress-forward INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443`).
+`make oda-canvas-port-forward INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443`).
 
 The TM Forum CTK containers call those URLs from inside Docker, where `127.0.0.1` is the container itself. Use an address
 both sides reach, and keep it identical for the patch and the forward, e.g. on Linux
-`make ingress-forward INGRESS_ADDRESS=172.17.0.1 INGRESS_FORWARD_ADDRESS=0.0.0.0` (the `docker0` address), on Docker
+`make oda-canvas-port-forward INGRESS_ADDRESS=172.17.0.1` (the `docker0` address; the forwards listen on `0.0.0.0` by default), on Docker
 Desktop `INGRESS_ADDRESS=host.docker.internal`.
 
 ### Component namespaces
@@ -118,7 +118,7 @@ After `make component-sample` (release `pc`) the Canvas creates a `ServiceMonito
 `product_catalog_api_counter`, which returns nothing here. The series appears only after the API handles events;
 for example, with `kubectl -n components port-forward svc/pc-prodcatapi 18080:8080`, POST/PATCH/DELETE under
 `http://localhost:18080/pc-productcatalogmanagement/tmf-api/productCatalogManagement/v4/category`. Then query
-`sum by (NotificationEvent) (pc_productcatalogmanagement_api_counter)` (`make observability-forward`, Prometheus on
+`sum by (NotificationEvent) (pc_productcatalogmanagement_api_counter)` (`make oda-canvas-port-forward`, Prometheus on
 `localhost:$(PROMETHEUS_LOCAL_PORT)`).
 
 ## Design notes
