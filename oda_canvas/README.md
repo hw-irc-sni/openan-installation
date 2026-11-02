@@ -1,52 +1,114 @@
 # ODA Canvas deployment automation
 
-Automates a development / quick-demo ODA Canvas environment on a local **kind** cluster.
-Stages run in this order (`make up`):
+Automates a development / quick-demo ODA Canvas environment on a local **kind** cluster. The deployment is split
+into stages that follow the Canvas `installation/README.md`, plus the portal and a sample component on top:
 
-1. **kind cluster** (`kind-config.yaml`, cluster `oda-canvas`, Kubernetes 1.30: the Canvas supports <= 1.30).
-2. **Istio** (Helm, `ISTIO_VERSION`) and a patched `istio-ingress` address (kind has no LoadBalancer).
-3. **ODA Canvas** (`charts/canvas-oda` from `CANVAS_SRC`, values in `canvas-values.yaml.tpl`): CRDs,
-   operators, cert-manager, Vault and the **bundled Keycloak** (realm `odari`, service
-   `canvas-keycloak:8083`, admin user `admin`). Demo profile: Istio gateway only; info-service,
-   resource-inventory, pdb and component-registry are off. Installed
-   without `--wait` (the post-install hooks would deadlock); the Makefile waits afterwards.
-4. **Observability** (`make observability`, part of `make up`): Prometheus + Grafana
-   (`kube-prometheus-stack`, release `monitoring`, namespace `monitoring`; `observability-values.yaml.tpl`)
-   and **Langfuse** v3 (`manifests/langfuse.yaml`: web, worker, Postgres, ClickHouse, Redis, MinIO), all pods.
-   These are the three tools listed on the portal's `/observability` page, which finds them by Service name
-   (`monitoring-grafana`, `monitoring-kube-prometheus-prometheus`, `langfuse-web`) in the `monitoring`
-   namespace and health-checks them. The Canvas `api-operator-istio` is set to create `ServiceMonitor`s, so
-   the Prometheus scrapes the metrics of every deployed component. The Canvas repo's own
-   `charts/observability-stack` (Prometheus, Grafana, Jaeger, OpenTelemetry) has no Langfuse and uses Service
-   names the portal does not look for, so it is not used; Jaeger/OTel are not deployed.
-   Random Langfuse secrets are generated into the cluster Secret `langfuse-secrets` (never in git).
-5. **Portal realm setup** (`scripts/portal-realm.sh`): adds the `canvas-portal` / `canvas-portal-admin`
-   clients, the `canvas-admin` group and the demo user to the Canvas realm (Keycloak partial import,
-   idempotent).
-6. **canvas-portal-v2**, from `tmforum-oda/oda-canvas/canvas-portal-v2/helm/canvas-portal` with
+| Target | What it does (Canvas installation README) |
+|---|---|
+| `make environment` | **Environment installation 1.-4.** Pre-flight checks (`scripts/preflight.sh`: docker, kind, kubectl, helm >= `HELM_MIN`, envsubst, python3, curl, git, openssl, Docker daemon, Canvas checkout and its git revision); kind cluster (`kind-config.yaml.tpl`, Kubernetes 1.30: the Canvas supports <= 1.30); Helm repositories and chart dependencies; **Istio** (Helm, `ISTIO_VERSION`) with the `istio-ingress` address patched (kind has no LoadBalancer); Gateway API CRDs; **Vault prerequisites**; Kubernetes permission check (`kubectl auth can-i`, as `installation/precheck.sh`). |
+| `make oda-canvas` | **Reference implementation (5.)**: `charts/canvas-oda` from `CANVAS_SRC` with `canvas-values.yaml.tpl`: CRDs, operators, cert-manager, **Vault** (namespace `canvas-vault`) and the **bundled Keycloak** (realm `odari`, service `canvas-keycloak:8083`, admin user `admin`). Demo profile: Istio gateway only; info-service, resource-inventory, pdb and component-registry are off. Installed **without `--wait`** (the post-install hooks would deadlock); the Makefile waits afterwards and runs `canvas-verify`. |
+| `make observability` | The Canvas **`charts/observability-stack`** (Prometheus + Grafana via kube-prometheus-stack, OpenTelemetry collector, Jaeger) as release `monitoring` in namespace `monitoring`, plus **Langfuse** v3 (`manifests/langfuse.yaml`: web, worker, Postgres, ClickHouse, Redis, MinIO). |
+| `make canvas-portal` | **canvas-portal-v2** on top of the Canvas Keycloak (below): portal images, realm setup, Helm release, health checks. Needs the Canvas (`oda-canvas`) and, for its `/observability` page, the observability stack. |
+| `make component-sample` | The TM Forum reference Product Catalog component (release `pc` in `components`); fails unless every component reaches `Complete`. |
+| `make bootstrap-oda-canvas` | `environment`, `oda-canvas`, `observability`, `canvas-portal`, `component-sample`, one after the other. |
+
+`make canvas-portal` does:
+
+1. **Portal images**, built from `PORTAL_SRC` (the published tags do not exist) and `kind load`ed.
+2. **Portal realm setup** (`scripts/portal-realm.sh`): adds the `canvas-portal` / `canvas-portal-admin`
+   clients, the `canvas-admin` group and the demo user to the Canvas realm (Keycloak admin REST API, idempotent).
+3. **canvas-portal-v2**, from `tmforum-oda/oda-canvas/canvas-portal-v2/helm/canvas-portal` with
    `portal-values.yaml.tpl`, pointed at the Canvas Keycloak.
+4. **Health checks** (`make verify`): backend `/health`, and the portal must see Langfuse, Grafana and Prometheus as healthy.
 
 The Canvas must be in the namespace `canvas`: the portal detects the gateway type there. The
 `/model-gateway-services` page stays "not available": its CRD is not part of `charts/oda-crds`.
 
+### Environment stage
+
+- **Host tools are checked, never installed.** A missing tool is reported with an install hint; nothing is
+  downloaded and no `sudo` is used. Helm >= 3.16 is required (the Makefile uses `--skip-schema-validation`); Helm 4 is
+  accepted (the Canvas documents Helm 3, this deployment is exercised with Helm 4; `--force-conflicts` is only passed to Helm 4).
+- **Dependencies**: `helm repo add` for istio, bitnami, hashicorp, jetstack, kong, apiseven, prometheus-community,
+  open-telemetry and jaegertracing. Kong and APISIX are not installed by the demo, but the umbrella chart cannot be
+  packaged without their dependencies. Dependencies are built only when a chart reports a non-`ok` status
+  (`helm dependency build`, which honours `Chart.lock` and keeps the Canvas checkout clean; `update` is the fallback).
+- **Vault** is a sub-chart of `canvas-oda`, so `make oda-canvas` installs it (README 4. describes it as part of the
+  Canvas). `environment` only makes sure it can be installed: hashicorp repo, dependencies, and a warning if
+  `canvas-values.yaml.tpl` disables `canvas-vault` (components requesting Secrets-Management would then stay
+  `InProgress-SecretsConfig`).
+- **Reproducibility**: the pre-flight prints the `CANVAS_SRC` git revision (and chart version). Set `CANVAS_REF` in
+  `config.mk` to fail when the checkout is at another revision.
+
+### Observability stage
+
+- The release is named `monitoring` and the Prometheus sub-chart gets `fullnameOverride: monitoring-kube-prometheus`,
+  so the Services are `monitoring-grafana`, `monitoring-kube-prometheus-prometheus` and `langfuse-web` in `monitoring`:
+  the three tools on the portal's `/observability` page, which finds them by name. Overrides are in
+  `observability-values.yaml.tpl`: no Alertmanager/node-exporter, no scrape of the kind control-plane components, 7d
+  retention, Grafana admin password, Jaeger pinned to `JAEGER_IMAGE_TAG` (chart default `latest`). The chart already
+  provides cross-namespace ServiceMonitor discovery and the containerd cAdvisor relabelings.
+- The Canvas `api-operator-istio` creates `ServiceMonitor`s (`openMetricsImplementation: ServiceMonitor`), so Prometheus
+  scrapes the metrics of every deployed component.
+- **Tracing**: components can send OTLP/HTTP to
+  `http://monitoring-opentelemetry-collector.monitoring.svc.cluster.local:4318/v1/traces`; traces show in Jaeger
+  (`make observability-forward`).
+- Random Langfuse secrets are generated into the cluster Secret `langfuse-secrets` (never in git).
+- **Upgrading an older cluster**: earlier versions installed a plain `kube-prometheus-stack` as release `monitoring`.
+  `make observability` stops with the command to remove it (`helm uninstall monitoring -n monitoring`) because
+  Helm cannot turn it into the Canvas stack in place. `make down && make bootstrap-oda-canvas` is the clean alternative.
+
 ## Usage
 
-Prerequisites: docker, kind, kubectl, helm, envsubst (gettext), python3, curl, make. About 4 CPU / 16 GB RAM.
+Prerequisites: docker, kind, kubectl, helm (>= 3.16), envsubst (gettext), python3, curl, git, openssl, make.
+
+**Resources** (Canvas minimum: 4 CPU / 16 GB RAM / 50 GB storage, see the installation README): the observability
+stack (Prometheus, Grafana, Jaeger, OTel, and Langfuse with ClickHouse, Postgres, Redis, MinIO) is added on top of that,
+so plan for **at least 6 CPU, 20 GB RAM and 60 GB free disk** for the full `make bootstrap-oda-canvas`, plus room for the components.
 
 ```bash
 cd oda_canvas
-make up              # cluster + istio + canvas + portal (slow: many images)
-make port-forward    # http://localhost:8080 (Ctrl-C to stop)
-make observability-forward   # Grafana :3001, Prometheus :9090, Langfuse :3002 (Ctrl-C to stop)
-make component-sample   # optional: gives /components and /exposedapis data
+cp config.env.example config.env   # then set the passwords/secrets
+make environment              # pre-flight + kind + Helm repos/deps + Istio + Vault prerequisites
+make oda-canvas               # the ODA Reference Implementation (slow: many images)
+make observability            # Prometheus, Grafana, OpenTelemetry, Jaeger, Langfuse
+make canvas-portal            # canvas-portal-v2 on the Canvas Keycloak
+make component-sample         # reference component must reach "Complete"
+# or all five in one go (slow: many images):
+make bootstrap-oda-canvas
+make port-forward             # http://localhost:8080 (Ctrl-C to stop)
+make observability-forward    # Grafana :3001, Prometheus :9090, Jaeger :16686, Langfuse :3002 (Ctrl-C to stop)
+make ingress-forward          # ExposedAPI URLs on this machine (see below)
 make status
-make down            # delete the cluster
+make down                     # delete the cluster
 ```
+
+All targets are idempotent. `make preflight` (alias `check`) runs the host checks alone; `make canvas-verify` checks the
+Canvas (8 `oda.tmforum.org` CRDs, Component `v1` served, `istio-ingress` address set, pods).
 
 Login: `portaladmin` / the `PORTAL_USER_PASSWORD` from `config.env` (members of `canvas-admin` may use the Helm and
 conformance APIs). Settings are in `config.mk`; passwords and secrets (portal user, Keycloak admin, Grafana admin, Langfuse initial user) are in `config.env` (untracked: `cp config.env.example config.env` first); override per run,
-e.g. `make up PORTAL_BUILD=false` to pull
+e.g. `make canvas-portal PORTAL_BUILD=false` to pull
 `tmforumodacanvas/canvas-portal:{frontend,backend}-0.1.0` instead of building the images from `PORTAL_SRC` (the default, as those tags were not found on Docker Hub).
+
+### ExposedAPI reachability and conformance testing
+
+`make environment` gives `istio-ingress` the address `INGRESS_ADDRESS` (default `127.0.0.1`) so the ExposedAPI URLs are
+populated; this must happen before components are installed (Canvas issue #621) and the patch is lost if the Service is
+recreated: `make ingress-address` re-applies it. The URLs are reachable only while `make ingress-forward` runs
+(ports `INGRESS_HTTP_PORT`/`INGRESS_HTTPS_PORT`, default 80/443, so privileges or other ports may be needed:
+`make ingress-forward INGRESS_HTTP_PORT=8081 INGRESS_HTTPS_PORT=8443`).
+
+The TM Forum CTK containers call those URLs from inside Docker, where `127.0.0.1` is the container itself. Use an address
+both sides reach, and keep it identical for the patch and the forward, e.g. on Linux
+`make ingress-forward INGRESS_ADDRESS=172.17.0.1 INGRESS_FORWARD_ADDRESS=0.0.0.0` (the `docker0` address), on Docker
+Desktop `INGRESS_ADDRESS=host.docker.internal`.
+
+### Component namespaces
+
+The Canvas operators only reconcile `components` and `odacompns-*`. The demo creates `components` (Canvas chart) and
+labels every namespace in `COMPONENT_NAMESPACES` with `istio-injection=enabled`. The former `temp-namespace` was removed:
+no operator watched it and it had no sidecar injection, so the portal's conformance RBAC now targets `components` only.
 
 ## Checking component metrics in Prometheus
 
@@ -67,7 +129,10 @@ for example, with `kubectl -n components port-forward svc/pc-prodcatapi 18080:80
   `http://canvas-keycloak.canvas.svc.cluster.local:8083/auth`; login goes through the backend, so the token
   issuer matches what the backend validates.
 - `cookieSecure` stays `false` (plain HTTP). Credentials are demo-only; do not reuse outside a local kind cluster.
-- `.rendered/` holds generated values and is gitignored.
+- `.rendered/` holds generated values and the kind config and is gitignored.
+- `dependentapi-simple-operator` no longer points at the disabled component-registry (`componentRegistryUrl: ""`). The operator
+  image itself may still log `CANVAS_INFO_ENDPOINT=http://info.canvas.svc.cluster.local` (an image default; the info service
+  is off). Whether a component with dependent APIs resolves cleanly without both services has not been exercised.
 
 ## Network / proxy troubleshooting
 
@@ -86,17 +151,19 @@ Symptom: `failed to fetch anonymous token ... dial tcp ...:443: connect: no rout
    ```
 
 2. If the daemon already shows the proxy, the failure can be a transient route/DNS problem to Docker Hub:
-   rerun `make up` (it is idempotent) or pre-pull the base images while the route works:
+   rerun `make bootstrap-oda-canvas` (it is idempotent) or pre-pull the base images while the route works:
    `node:20-alpine`, `nginx:1.27-alpine`, `python:3.12-slim`, `python:3.12-alpine`. `make` reuses local
    images. Canvas images (incl. `bitnamilegacy/*`) are pulled by `scripts/preload-images.sh`.
 
-The kind node pulls nothing from the internet: every image is `kind load`ed.
+The kind node does not pull the images: each stage `kind load`s its own (`scripts/preload-images.sh environment|canvas|observability`).
+The Canvas hook Jobs default to `bitnamilegacy/kubectl:latest`, which Kubernetes always pulls; `canvas-values.yaml.tpl` pins it
+to `HOOK_KUBECTL_TAG`, so, once the image is loaded, the hooks no longer need the registry (not exercised on an air-gapped host).
 
 ## OpenAN operator (optional)
 
 An external kopf operator (`operator/openan-operator`, chart `charts/openan-operator`) manages OpenAN as ODA
 Components and publishes Canvas `a2a` ExposedAPIs as Agent Cards in the Registry Center. See
-`operator/openan-operator/README.md` for the design. It is not part of `make up`:
+`operator/openan-operator/README.md` for the design. It is not part of `make bootstrap-oda-canvas`:
 
 ```bash
 make openan-operator-image   # build the operator image, pull RC/OC images, kind load them

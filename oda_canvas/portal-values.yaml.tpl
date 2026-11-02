@@ -5,7 +5,7 @@ rbac:
   modelGatewayAccess:
     targetNamespaces: [components]
   canvasConformanceAccess:
-    targetNamespaces: [components, temp-namespace]
+    targetNamespaces: [components]
 frontend:
   image: {repository: ${PORTAL_IMAGE_REPO}, tag: ${PORTAL_FRONTEND_TAG}, pullPolicy: IfNotPresent}
   service: {type: ClusterIP}

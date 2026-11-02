@@ -19,6 +19,10 @@ spec:
   template:
     metadata: {labels: {app: langfuse-web}}
     spec:
+      initContainers:   # Postgres/ClickHouse start in parallel: wait instead of crashing once on the DB migration
+        - name: wait-for-deps
+          image: busybox:1.35
+          command: ["sh", "-c", "for h in langfuse-postgres:5432 langfuse-clickhouse:8123 langfuse-redis:6379; do until nc -z -w2 ${h%:*} ${h#*:}; do echo waiting for $h; sleep 2; done; done"]
       containers:
         - name: web
           image: langfuse/langfuse:${LANGFUSE_IMAGE_TAG}
@@ -61,6 +65,10 @@ spec:
   template:
     metadata: {labels: {app: langfuse-worker}}
     spec:
+      initContainers:   # Postgres/ClickHouse start in parallel: wait instead of crashing once on the DB migration
+        - name: wait-for-deps
+          image: busybox:1.35
+          command: ["sh", "-c", "for h in langfuse-postgres:5432 langfuse-clickhouse:8123 langfuse-redis:6379; do until nc -z -w2 ${h%:*} ${h#*:}; do echo waiting for $h; sleep 2; done; done"]
       containers:
         - name: worker
           image: langfuse/langfuse-worker:${LANGFUSE_IMAGE_TAG}
