@@ -425,3 +425,81 @@ def test_validate_values_rejects_injection_prone_scalars(values):
 def test_validate_values_accepts_normal_scalars():
     stack.validate_values("frontend", {"image": {"tag": "v1.2.3-rc_1", "pullPolicy": "IfNotPresent"}, "replicas": 2,
                                        "port": 8080, "specPort": 8081, "component": {"name": "openan-frontend", "version": "1.0.0"}})
+
+
+# ---- stuck pending Helm releases -------------------------------------------------------------------------------------
+
+def _helm_history(*revs):
+    """`helm history -o json` rows: (revision, status, updated)."""
+    import json
+    return json.dumps([{"revision": r, "status": st, "updated": ts, "chart": "c-0.1.0"} for r, st, ts in revs])
+
+
+def _fake_helm(monkeypatch, history_json, calls):
+    from src import helm_driver
+
+    def run(args, timeout=300):
+        calls.append(args[0])
+        if args[0] == "history":
+            if history_json is None:
+                raise helm_driver.HelmError("Error: release: not found")
+            return history_json
+        return ""
+    monkeypatch.setattr(helm_driver, "_run", run)
+    return helm_driver
+
+
+NOW = None
+
+
+def _now():
+    from datetime import datetime, timezone
+    return datetime(2026, 11, 2, 21, 10, 0, tzinfo=timezone.utc)
+
+
+OLD, FRESH = "2026-11-02T21:06:35.123456789Z", "2026-11-02T21:09:50.5Z"
+
+
+def test_helm_recover_ignores_healthy_missing_and_young_pending_releases(monkeypatch):
+    for hist in (None, _helm_history((1, "deployed", OLD)),
+                 _helm_history((1, "deployed", OLD), (2, "pending-upgrade", FRESH))):
+        calls = []
+        drv = _fake_helm(monkeypatch, hist, calls)
+        assert drv.recover_if_stuck("rel", "ns", stale_after=150, now=_now()) is None
+        assert calls == ["history"]
+
+
+def test_helm_recover_rolls_a_stuck_upgrade_back_to_the_last_good_revision(monkeypatch):
+    runs = []
+    drv = _fake_helm(monkeypatch, _helm_history((1, "superseded", OLD), (2, "deployed", OLD), (3, "pending-upgrade", OLD)), [])
+    monkeypatch.setattr(drv, "_run", lambda args, timeout=300: runs.append(args) or (
+        _helm_history((1, "superseded", OLD), (2, "deployed", OLD), (3, "pending-upgrade", OLD)) if args[0] == "history" else ""))
+    assert drv.recover_if_stuck("rel", "ns", stale_after=150, now=_now()) == "rolled-back"
+    assert ["rollback", "rel", "2", "-n", "ns"] in runs and not any(a[0] == "uninstall" for a in runs)
+
+
+def test_helm_recover_uninstalls_a_stuck_first_install_or_when_nothing_is_good(monkeypatch):
+    for hist in (_helm_history((1, "pending-install", OLD)),
+                 _helm_history((1, "failed", OLD), (2, "pending-upgrade", OLD))):
+        runs = []
+        drv = _fake_helm(monkeypatch, hist, [])
+        monkeypatch.setattr(drv, "_run", lambda args, timeout=300, hist=hist, runs=runs: runs.append(args) or (
+            hist if args[0] == "history" else ""))
+        assert drv.recover_if_stuck("rel", "ns", stale_after=150, now=_now()) == "uninstalled"
+        assert ["uninstall", "rel", "-n", "ns"] in runs and not any(a[0] == "rollback" for a in runs)
+
+
+def test_helm_upgrade_install_repairs_before_upgrading_and_reports_it(monkeypatch):
+    runs = []
+    from src import helm_driver as drv
+    hist = _helm_history((1, "deployed", OLD), (2, "pending-upgrade", OLD))
+    monkeypatch.setattr(drv, "_run", lambda args, timeout=300: runs.append(args[0]) or (hist if args[0] == "history" else ""))
+    monkeypatch.setattr(drv, "STALE_AFTER", 0)
+    assert drv.upgrade_install("rel", "/chart", "ns", {"a": 1}) == "rolled-back"
+    assert runs == ["history", "rollback", "upgrade"]
+
+
+def test_helm_parses_nanosecond_timestamps():
+    from src import helm_driver as drv
+    assert drv._parse_time("2026-11-02T21:51:17.570140138Z").microsecond == 570140
+    assert drv._parse_time("2026-11-02T21:09:50.5Z").microsecond == 500000

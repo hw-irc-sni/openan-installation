@@ -187,8 +187,10 @@ caveat as above: treat them as an order of magnitude.
 `openan-operator` waits for the old operator pod to terminate before it applies the CR. Without that wait, the terminating
 pod and the new one reconcile the CR at the same time and both run `helm upgrade --install`; the pod that is killed
 mid-upgrade leaves the release in `pending-upgrade`, every later upgrade fails with "another operation (install/upgrade/
-rollback) is in progress", and the CR never gets Ready (`make bootstrap-openan` times out after 10 minutes). If it ever happens,
-`make openan-clean` removes the stuck release and a new `make bootstrap-openan` starts clean.
+rollback) is in progress", and the CR never gets Ready (`make bootstrap-openan` times out after 10 minutes). The operator
+now repairs such a release by itself (rollback or uninstall, after 150 s without progress; see
+`operator/openan-operator/README.md`), so a stuck release delays the CR by about 2.5 minutes instead of blocking it; if you
+have an older operator image, `make openan-clean` removes the stuck release and a new `make bootstrap-openan` starts clean.
 
 ## Design notes
 
