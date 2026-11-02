@@ -62,10 +62,11 @@ sequenceDiagram
   `-signing-key` are generated on first reconcile and are owned by the CR. The operator token is a
   `vendor_agent` Bearer token for the Registry Center (owner isolation: one stable identity).
 - **Image tags** have no default: `spec.<component>.values.image.tag` is required.
-- **Signing**: the Registry Center only accepts signed cards and fetches verification keys over HTTPS from an
-  allow-listed `jku` host. In-cluster HTTP does not satisfy this, so the kind demo sets
-  `spec.cardSync.signing.enabled: false`, which also disables signature validation in the Registry Center.
-  Production needs an HTTPS JWKS endpoint (`spec.cardSync.signing.jku`) and `REGISTRY_JWK_ALLOWLIST`.
+- **Signing**: the Registry Center only accepts signed cards. The operator signs them (ES256) with the generated
+  `-signing-key` Secret and publishes the public key in the trust ConfigMap `<cr>-registry-trust` that the Registry
+  Center verifies against, so the kind demo needs no HTTPS `jku` endpoint (`spec.cardSync.signing.enabled: true`).
+  Setting it to `false` disables signature validation in the Registry Center. Production should serve the keys from an
+  HTTPS JWKS endpoint (`spec.cardSync.signing.jku`) with `REGISTRY_JWK_ALLOWLIST`.
 - **What a CR may set:** Helm `values` per component are merged over the generated ones, except the Secret
   references, the trust store and the Registry/backend URLs, which are always the generated ones (credentials are
   sent to those URLs). `registry.extraEnv` / `orchestration.extraEnv` may not set auth, token or registry URL
