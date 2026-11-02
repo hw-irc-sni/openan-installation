@@ -322,6 +322,10 @@ openan-portal-route:
 
 # A sample a2a Component: its Agent Card must show up in the Registry Center.
 openan-sample:
+	@# kind nodes cannot pull from Docker Hub: load the sample's image(s) from the Docker daemon first.
+	@for i in $$(grep -hoE 'image:[[:space:]]*[^[:space:]]+' manifests/openan/sample-a2a-agent.yaml | awk '{print $$2}' | sort -u); do \
+	  docker image inspect $$i >/dev/null 2>&1 || docker pull -q $$i; \
+	  kind load docker-image $$i --name $(CLUSTER_NAME); done
 	kubectl apply -f manifests/openan/sample-a2a-agent.yaml
 	$(MAKE) openan-verify
 

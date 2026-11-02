@@ -66,7 +66,9 @@ sequenceDiagram
   `-signing-key` Secret and publishes the public key in the trust ConfigMap `<cr>-registry-trust` that the Registry
   Center verifies against, so the kind demo needs no HTTPS `jku` endpoint (`spec.cardSync.signing.enabled: true`).
   The ConfigMap is created by the first successful card fetch (before the card is published), so it does not exist
-  until an a2a ExposedAPI has been synced once; the Registry Center mounts it as optional and has no keys before that.
+  until an a2a ExposedAPI has been synced once; the Registry Center mounts it as optional and has no keys before that. After the ConfigMap is created the kubelet takes
+  about a minute to sync it into the Registry pod, so the first publish can fail with `401 no valid signature with a
+  trusted key`; the operator retries it and it then succeeds.
   Setting it to `false` disables signature validation in the Registry Center. Production should serve the keys from an
   HTTPS JWKS endpoint (`spec.cardSync.signing.jku`) with `REGISTRY_JWK_ALLOWLIST`.
 - **What a CR may set:** Helm `values` per component are merged over the generated ones, except the Secret
