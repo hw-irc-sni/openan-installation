@@ -23,7 +23,18 @@ GOOD = frozenset({"deployed", "superseded"})
 # UPGRADE_TIMEOUT. A revision still pending after STALE_AFTER (> UPGRADE_TIMEOUT) therefore has no live owner (the process
 # that started it was killed) and blocks every later upgrade with "another operation is in progress".
 UPGRADE_TIMEOUT = 120
-STALE_AFTER = float(os.environ.get("HELM_PENDING_STALE_SECONDS", "150"))
+
+
+def _stale_after(raw: str | None) -> float:
+    """The staleness window; never below UPGRADE_TIMEOUT + 30 s, or a live operation could be mistaken for a dead one."""
+    try:
+        wanted = float(raw) if raw else 150.0
+    except ValueError:
+        wanted = 150.0
+    return max(wanted, UPGRADE_TIMEOUT + 30.0)
+
+
+STALE_AFTER = _stale_after(os.environ.get("HELM_PENDING_STALE_SECONDS"))
 
 
 class HelmError(RuntimeError):
@@ -56,9 +67,13 @@ def recover_if_stuck(release: str, namespace: str, stale_after: float | None = N
                      now: datetime | None = None) -> str | None:
     """Repair a release whose latest revision has been pending for longer than any live operation could take.
 
-    Returns "rolled-back" (back to the last good revision), "uninstalled" (nothing to go back to: the next
-    `upgrade --install` installs it afresh; data PVCs are kept by their resource policy) or None (healthy, or the
-    pending revision is still young enough to belong to a running operation)."""
+    Returns "rolled-back" (back to the last good revision), "uninstalled" (a first install that never completed: there
+    is nothing to lose, the next `upgrade --install` installs it afresh) or None (healthy, or the pending revision is
+    still young enough to belong to a running operation).
+
+    It never uninstalls a release that has been installed before: the Canvas adopts its data PVCs (ownerReference to
+    the Component), so removing the Component would delete the data. Such a release with no good revision to roll back
+    to raises HelmError instead (the reconcile keeps retrying and the error stays visible)."""
     revisions = history(release, namespace)
     if not revisions:
         return None
@@ -75,11 +90,15 @@ def recover_if_stuck(release: str, namespace: str, stale_after: float | None = N
                     release, last["revision"], last["status"], age, target)
         _run(["rollback", release, str(target), "-n", namespace], timeout=UPGRADE_TIMEOUT)
         action = "rolled-back"
-    else:
-        log.warning("helm %s: revision %s stuck in %s for %.0fs and there is no good revision; uninstalling",
-                    release, last["revision"], last["status"], age)
+    elif last["status"] == "pending-install" and last["revision"] == 1:
+        log.warning("helm %s: first install stuck in pending-install for %.0fs; uninstalling it to install afresh",
+                    release, age)
         uninstall(release, namespace)
         action = "uninstalled"
+    else:
+        raise HelmError(
+            f"{release}: revision {last['revision']} stuck in {last['status']} for {age:.0f}s and there is no good "
+            "revision to roll back to; not uninstalling a release that may hold data (fix or delete it manually)")
     metrics.HELM_RECOVERIES.labels(action).inc()
     return action
 

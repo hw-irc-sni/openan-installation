@@ -478,15 +478,35 @@ def test_helm_recover_rolls_a_stuck_upgrade_back_to_the_last_good_revision(monke
     assert ["rollback", "rel", "2", "-n", "ns"] in runs and not any(a[0] == "uninstall" for a in runs)
 
 
-def test_helm_recover_uninstalls_a_stuck_first_install_or_when_nothing_is_good(monkeypatch):
-    for hist in (_helm_history((1, "pending-install", OLD)),
-                 _helm_history((1, "failed", OLD), (2, "pending-upgrade", OLD))):
+def test_helm_recover_uninstalls_only_a_stuck_first_install(monkeypatch):
+    runs = []
+    drv = _fake_helm(monkeypatch, None, [])
+    hist = _helm_history((1, "pending-install", OLD))
+    monkeypatch.setattr(drv, "_run", lambda args, timeout=300: runs.append(args) or (hist if args[0] == "history" else ""))
+    assert drv.recover_if_stuck("rel", "ns", stale_after=150, now=_now()) == "uninstalled"
+    assert ["uninstall", "rel", "-n", "ns"] in runs and not any(a[0] == "rollback" for a in runs)
+
+
+def test_helm_recover_never_uninstalls_a_release_that_may_hold_data(monkeypatch):
+    # pending upgrade with nothing to roll back to, and a pending install that is not the first revision
+    for hist in (_helm_history((1, "failed", OLD), (2, "pending-upgrade", OLD)),
+                 _helm_history((1, "failed", OLD), (2, "pending-install", OLD)),
+                 _helm_history((1, "failed", OLD), (2, "pending-rollback", OLD))):
         runs = []
         drv = _fake_helm(monkeypatch, hist, [])
         monkeypatch.setattr(drv, "_run", lambda args, timeout=300, hist=hist, runs=runs: runs.append(args) or (
             hist if args[0] == "history" else ""))
-        assert drv.recover_if_stuck("rel", "ns", stale_after=150, now=_now()) == "uninstalled"
-        assert ["uninstall", "rel", "-n", "ns"] in runs and not any(a[0] == "rollback" for a in runs)
+        with pytest.raises(drv.HelmError, match="not uninstalling"):
+            drv.recover_if_stuck("rel", "ns", stale_after=150, now=_now())
+        assert [a[0] for a in runs] == ["history"]
+
+
+def test_helm_stale_window_never_drops_below_the_helm_timeout():
+    from src import helm_driver as drv
+    assert drv._stale_after(None) == 150
+    assert drv._stale_after("20") == drv.UPGRADE_TIMEOUT + 30
+    assert drv._stale_after("not a number") == 150
+    assert drv._stale_after("600") == 600
 
 
 def test_helm_upgrade_install_repairs_before_upgrading_and_reports_it(monkeypatch):
