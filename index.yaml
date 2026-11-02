@@ -1,0 +1,50 @@
+apiVersion: v1
+entries:
+  openan-frontend:
+  - apiVersion: v2
+    appVersion: v1
+    created: "2026-11-02T11:08:17.500172399Z"
+    description: OpenAN portal packaged as an ODA Component (web UI, proxies to Registry
+      and Orchestration Centers)
+    digest: be1ddc2ee0bccf13d2e8a83dece508c9b2f16373a2e8752942908fdb7442576f
+    name: openan-frontend
+    type: application
+    urls:
+    - https://github.com/hw-irc-sni/openan-installation/releases/download/openan-frontend-0.1.0/openan-frontend-0.1.0.tgz
+    version: 0.1.0
+  openan-operator:
+  - apiVersion: v2
+    appVersion: v1
+    created: "2026-11-02T11:08:17.718871442Z"
+    description: A Helm chart to deploy the OpenAN operator on a running ODA Canvas
+    digest: dd628b6705094a616c471bec43ca6ae7818463b47e51c570c3b14b1abec3d269
+    name: openan-operator
+    type: application
+    urls:
+    - https://github.com/hw-irc-sni/openan-installation/releases/download/openan-operator-0.1.0/openan-operator-0.1.0.tgz
+    version: 0.1.0
+  openan-orchestration-center:
+  - apiVersion: v2
+    appVersion: v1
+    created: "2026-11-02T11:08:17.926032476Z"
+    description: OpenAN Orchestration Center packaged as an ODA Component (workflow
+      generation and execution)
+    digest: 1c9371036c852c39bf0561d08f331a5cccb067c5fdc422d2dd26536cb53f4b95
+    name: openan-orchestration-center
+    type: application
+    urls:
+    - https://github.com/hw-irc-sni/openan-installation/releases/download/openan-orchestration-center-0.1.0/openan-orchestration-center-0.1.0.tgz
+    version: 0.1.0
+  openan-registry-center:
+  - apiVersion: v2
+    appVersion: v1
+    created: "2026-11-02T11:08:18.134138667Z"
+    description: OpenAN Registry Center packaged as an ODA Component (A2A Agent Card
+      registry)
+    digest: 0190730849527e935514b53d505723f3bd7ab703f9114afcf964b22d5cfd15ac
+    name: openan-registry-center
+    type: application
+    urls:
+    - https://github.com/hw-irc-sni/openan-installation/releases/download/openan-registry-center-0.1.0/openan-registry-center-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-11-02T11:08:18.13415109Z"
