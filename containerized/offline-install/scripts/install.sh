@@ -19,6 +19,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Shared tools (gen_certs_offline.py, etc.) live at the repo root, one level up.
+REPO_ROOT="$(cd "$BUNDLE_DIR/../.." && pwd)"
 # shellcheck source=lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
 
@@ -50,7 +52,7 @@ INGRESS_HOST=""
 HTTPS_ENABLED="true"
 HTTPS_VERIFY_CLIENT="false"
 # TLS secrets: empty = generate self-signed certificates at install time
-# (tool/gen_certs.py) into openan-rc-tls / openan-oc-tls /
+# (tool/gen_certs_offline.py) into openan-rc-tls / openan-oc-tls /
 # openan-ingress-client (+ openan-public-tls when INGRESS_HOST is set).
 # Set all three names to use operator-provided Secrets instead.
 RC_TLS_SECRET=""
@@ -109,12 +111,9 @@ for _bool_var in INSTALL_REGISTRY INSTALL_METALLB HTTPS_ENABLED HTTPS_VERIFY_CLI
     printf -v "$_bool_var" '%s' "$_bool_val"
 done
 
-if [ -n "$INGRESS_HOST" ]; then
-    if printf '%s' "$INGRESS_HOST" | grep -Eq '^[0-9.]+$' || printf '%s' "$INGRESS_HOST" | grep -q ':'; then
-        log_error "INGRESS_HOST must be a DNS name, not an IP address (Kubernetes rejects IP hosts; leave empty for direct IP access)"
-        exit 2
-    fi
-fi
+# INGRESS_HOST may be a DNS name or a bare IP address: an IP enables
+# https://<IP> public access directly (MetalLB VIP or node IP), with the
+# matching IP SAN in the generated public certificate.
 
 case "$DB_TYPE" in
     postgresql|mysql) ;;
@@ -202,12 +201,6 @@ if [ -z "$OC_ADMIN_PASSWORD" ]; then
 fi
 
 # --- Validation (after prompts: interactive answers override config.env) -----
-if [ -n "$INGRESS_HOST" ]; then
-    if printf '%s' "$INGRESS_HOST" | grep -Eq '^[0-9.]+$' || printf '%s' "$INGRESS_HOST" | grep -q ':'; then
-        log_error "INGRESS_HOST must be a DNS name, not an IP address (Kubernetes rejects IP hosts; leave empty for direct IP access)"
-        exit 2
-    fi
-fi
 if [ -z "$DB_PASSWORD" ]; then
     log_error "DB_PASSWORD is required (config.env or the interactive prompt); there is no default."
     exit 2
@@ -304,7 +297,7 @@ if [ "$HTTPS_ENABLED" = "true" ]; then
     if [ -n "$RC_TLS_SECRET" ] || [ -n "$OC_TLS_SECRET" ] || [ -n "$INGRESS_CLIENT_SECRET" ]; then
         echo "  TLS:              existing Secrets ($RC_TLS_SECRET / $OC_TLS_SECRET); ingress verifies backends"
     else
-        echo "  TLS:              self-signed via tool/gen_certs.py; ingress verifies backends"
+        echo "  TLS:              self-signed via tool/gen_certs_offline.py; ingress verifies backends"
     fi
 fi
 echo "  Registry center:  $REGISTRY_CENTER_IMAGE"
@@ -526,7 +519,7 @@ fi
 log_step "[6/7] Deploying OpenAN"
 
 # --- TLS certificates (HTTPS default) ----------------------------------------
-# generate: tool/gen_certs.py (openssl) + installer-created Secrets
+# generate: tool/gen_certs_offline.py (openssl) + installer-created Secrets
 # existing: operator-provided Secrets (all three names required)
 create_secret_from_files() {
     local name="$1"; shift
@@ -553,10 +546,22 @@ if [ "$HTTPS_ENABLED" = "true" ]; then
         INGRESS_CLIENT_SECRET="openan-ingress-client"
         CERT_DIR="$BUNDLE_DIR/certs"
         GEN_ARGS=(--out "$CERT_DIR" --namespace "$K8S_NAMESPACE")
-        [ -n "$INGRESS_HOST" ] && GEN_ARGS+=(--ingress-host "$INGRESS_HOST")
-        [ -n "$INGRESS_IP" ] && GEN_ARGS+=(--ingress-ip "$INGRESS_IP")
+        # INGRESS_HOST may be a DNS name (SAN via --ingress-host) or a bare IP
+        # (SAN via --ingress-ip). The LoadBalancer VIP and the registry node IP
+        # are added as IP SANs too, so https works via VIP and via NodePort.
+        if [ -n "$INGRESS_HOST" ]; then
+            if printf '%s' "$INGRESS_HOST" | grep -Eq '^[0-9.]+$' || printf '%s' "$INGRESS_HOST" | grep -q ':'; then
+                GEN_ARGS+=(--ingress-ip "$INGRESS_HOST")
+            else
+                GEN_ARGS+=(--ingress-host "$INGRESS_HOST")
+            fi
+        fi
+        [ -n "$INGRESS_IP" ] && [ "$INGRESS_IP" != "$INGRESS_HOST" ] && GEN_ARGS+=(--ingress-ip "$INGRESS_IP")
+        if [ -n "$REGISTRY_NODE_IP" ] && [ "$REGISTRY_NODE_IP" != "$INGRESS_IP" ] && [ "$REGISTRY_NODE_IP" != "$INGRESS_HOST" ]; then
+            GEN_ARGS+=(--ingress-ip "$REGISTRY_NODE_IP")
+        fi
         log_info "Generating self-signed certificates (openssl)..."
-        python3 "$BUNDLE_DIR/tool/gen_certs.py" "${GEN_ARGS[@]}" || {
+        python3 "$REPO_ROOT/tool/gen_certs_offline.py" "${GEN_ARGS[@]}" || {
             log_error "Certificate generation failed (openssl and python3 are required)"
             exit 1
         }
@@ -879,24 +884,31 @@ smoke() {
 
 CURL_EXTRA=""
 echo ""
-if [ -n "$INGRESS_IP" ]; then
-    if [ "$HTTPS_ENABLED" = "true" ] && [ -n "$INGRESS_HOST" ] && [ -n "$PUBLIC_TLS_SECRET" ]; then
-        CURL_EXTRA="--resolve ${INGRESS_HOST}:443:${INGRESS_IP}"
-        if [ -n "$BUNDLE_DIR/certs/ca/ca.cer" ] && [ -r "$BUNDLE_DIR/certs/ca/ca.cer" ]; then
-            CURL_EXTRA="$CURL_EXTRA --cacert $BUNDLE_DIR/certs/ca/ca.cer"
-        else
-            CURL_EXTRA="$CURL_EXTRA -k"
-        fi
-        echo "  Access URL:  https://${INGRESS_HOST}/ (-> ${INGRESS_IP})"
-        smoke "https://${INGRESS_HOST}/registry/rest/v1/registry-center/agent-cards" "registry"
-        smoke "https://${INGRESS_HOST}/api/orchestrate/rest/v1/orchestrate/agent-cards" "orchestration"
-        smoke "https://${INGRESS_HOST}/api/registry/rest/v1/registry-center/agent-cards" "registry-via-gateway"
+# Public HTTPS entry (DNS name or bare IP) takes precedence over the plain
+# LoadBalancer-IP / frontend-NodePort fallbacks. An IP INGRESS_HOST needs no
+# --resolve (clients connect to the IP directly, no SNI); a DNS name resolves
+# through the LoadBalancer VIP when one is assigned.
+if [ "$HTTPS_ENABLED" = "true" ] && [ -n "$INGRESS_HOST" ] && [ -n "$PUBLIC_TLS_SECRET" ]; then
+    if printf '%s' "$INGRESS_HOST" | grep -Eq '^[0-9.]+$' || printf '%s' "$INGRESS_HOST" | grep -q ':'; then
+        CURL_EXTRA=""
+        [ -n "$INGRESS_IP" ] && [ "$INGRESS_IP" != "$INGRESS_HOST" ] && CURL_EXTRA="--resolve ${INGRESS_HOST}:443:${INGRESS_IP}"
     else
-        echo "  Access URL:  http://${INGRESS_IP}/"
-        smoke "http://${INGRESS_IP}/registry/rest/v1/registry-center/agent-cards" "registry"
-        smoke "http://${INGRESS_IP}/api/orchestrate/rest/v1/orchestrate/agent-cards" "orchestration"
-        smoke "http://${INGRESS_IP}/api/registry/rest/v1/registry-center/agent-cards" "registry-via-gateway"
+        CURL_EXTRA="--resolve ${INGRESS_HOST}:443:${INGRESS_IP}"
     fi
+    if [ -n "$BUNDLE_DIR/certs/ca/ca.cer" ] && [ -r "$BUNDLE_DIR/certs/ca/ca.cer" ]; then
+        CURL_EXTRA="$CURL_EXTRA --cacert $BUNDLE_DIR/certs/ca/ca.cer"
+    else
+        CURL_EXTRA="$CURL_EXTRA -k"
+    fi
+    echo "  Access URL:  https://${INGRESS_HOST}/"
+    smoke "https://${INGRESS_HOST}/registry/rest/v1/registry-center/agent-cards" "registry"
+    smoke "https://${INGRESS_HOST}/api/orchestrate/rest/v1/orchestrate/agent-cards" "orchestration"
+    smoke "https://${INGRESS_HOST}/api/registry/rest/v1/registry-center/agent-cards" "registry-via-gateway"
+elif [ -n "$INGRESS_IP" ]; then
+    echo "  Access URL:  http://${INGRESS_IP}/"
+    smoke "http://${INGRESS_IP}/registry/rest/v1/registry-center/agent-cards" "registry"
+    smoke "http://${INGRESS_IP}/api/orchestrate/rest/v1/orchestrate/agent-cards" "orchestration"
+    smoke "http://${INGRESS_IP}/api/registry/rest/v1/registry-center/agent-cards" "registry-via-gateway"
 else
     NODE_PORT="$("$KUBECTL" -n "$K8S_NAMESPACE" get svc openan-frontend -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
     NODE_IP="$("$KUBECTL" get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)"

@@ -9,11 +9,11 @@ Installation tooling (no application source) for OpenAN: Registry Center, Orches
 ## Deployment lines (each is largely self-contained)
 
 - `containerized/online-install/` — maintained Helm chart (`openan-chart/`) + `install.sh`/`configure.py` convenience installer. The chart is the source of truth; the installer never bypasses it. Cluster/Helm/Ingress infra is managed independently.
-- `containerized/offline-install/` — offline Kubernetes line. Has its **own copy** of chart templates (`chart/`), plus `scripts/` (install, push-images, check-env), `tool/gen_certs.py`. Includes MySQL and PostgreSQL statefulsets, frontend nginx with mTLS to backends (BFF proxy), PV/PVC per storage class.
+- `containerized/offline-install/` — offline Kubernetes line. Has its **own copy** of chart templates (`chart/`), plus `scripts/` (install, push-images, check-env); its cert generator is the shared `tool/gen_certs_offline.py` at repo root (online line: `tool/gen_certs.py`). Includes MySQL and PostgreSQL statefulsets, frontend nginx with mTLS to backends (BFF proxy), PV/PVC per storage class.
 - `containerized/offline-install-compose/` — offline single-host Docker Compose (`scripts/install.sh`, `scripts/configure.py`, `config.env.example`, `templates/`). One instance per app, not HA.
 - `containerized/build/` — shared image builder (`build.sh [registry|orchestration|portal]`, `portal/` for the portal image + nginx `default.conf.template`).
 - `binary/` — historical VM/bare-metal installers; **not validated against the current auth/config contract**. Don't treat as supported.
-- `docs/*-architecture.md` — design docs per line; `containerized/TRANSPORT_DEPLOYMENT.md` (+ `.zh.md`) is the HTTP/HTTPS, auth, and database **deployment contract** — read before changing chart values, auth, or TLS behavior. Keep the zh version in sync.
+- `docs/en/*.en.md` + `docs/zh/*.zh.md` — bilingual installation guides and design docs per line; `docs/en/TRANSPORT_DEPLOYMENT.md` (+ `docs/zh/TRANSPORT_DEPLOYMENT.zh.md`) is the HTTP/HTTPS, auth, and database **deployment contract** — read before changing chart values, auth, or TLS behavior. Keep the zh version in sync.
 - `oda_canvas/` — currently empty (branch `oda-integration`).
 
 Because online and offline-k8s charts are duplicated, a fix in one template often needs mirroring in the other (check both `online-install/openan-chart/templates/` and `offline-install/chart/templates/`).

@@ -18,9 +18,9 @@ jobs:
         with:
           version: v3.19.0
       - run: pip install pytest pyyaml cryptography kopf kubernetes httpx prometheus-client bcrypt
-      - run: python -m pytest tests/ -q
+      - run: python -m pytest tests/ -q --tb=short
       - name: OpenAN operator unit tests
-        run: python -m pytest operator/openan-operator/tests -q
+        run: python -m pytest operator/openan-operator/tests -q --tb=short
       - name: Operator and component charts
         run: |
           helm lint charts/openan-operator

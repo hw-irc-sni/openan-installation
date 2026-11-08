@@ -25,7 +25,7 @@ openan-installation/
 
 ### 1. Clustered Containerized Installation (Kubernetes)
 
-Helm deployment with explicit database, protocol, credentials and certificate settings. OC remains single-replica until shared sessions are implemented. Read [the deployment contract](containerized/TRANSPORT_DEPLOYMENT.md) before upgrading; this chart requires matching newly built service images.
+Helm deployment with explicit database, protocol, credentials and certificate settings. OC remains single-replica until shared sessions are implemented. Read [the deployment contract](docs/en/TRANSPORT_DEPLOYMENT.md) before upgrading; this chart requires matching newly built service images.
 
 ```bash
 git clone https://github.com/project-openan/openan-installation.git
@@ -105,7 +105,7 @@ helm install openan-operator openan/openan-operator -n openan-operator --create-
 ```
 
 The enabled `openan-registry-center`, `openan-orchestration-center` and `openan-frontend` charts have no default image
-tag: set `image.tag` explicitly (see `containerized/TRANSPORT_DEPLOYMENT.md` for the deployment contract).
+tag: set `image.tag` explicitly (see `docs/en/TRANSPORT_DEPLOYMENT.md` for the deployment contract).
 
 Maintainers:
 

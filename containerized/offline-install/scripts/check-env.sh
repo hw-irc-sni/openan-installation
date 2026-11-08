@@ -16,6 +16,8 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Shared tools live at the repo root, one level up from the bundle.
+REPO_ROOT="$(cd "$BUNDLE_DIR/../.." && pwd)"
 # shellcheck source=lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
 
@@ -85,8 +87,8 @@ section "Transport security (HTTPS)"
 if [ "$(printf '%s' "$HTTPS_ENABLED" | tr '[:upper:]' '[:lower:]')" != "true" ]; then
     warn "HTTPS_ENABLED is not true — in-cluster traffic stays plain HTTP"
 else
-    if [ -n "$INGRESS_HOST" ] && { printf '%s' "$INGRESS_HOST" | grep -Eq '^[0-9.]+$' || printf '%s' "$INGRESS_HOST" | grep -q ':'; }; then
-        fail "INGRESS_HOST must be a DNS name, not an IP address (Kubernetes rejects IP hosts)"
+    if [ -n "$INGRESS_HOST" ]; then
+        pass "Ingress host: $INGRESS_HOST (DNS name or IP; IP enables https://<IP> public access)"
     fi
     if [ -n "$RC_TLS_SECRET" ] || [ -n "$OC_TLS_SECRET" ] || [ -n "$INGRESS_CLIENT_SECRET" ]; then
         # Existing-Secret mode: all three names required and present in the cluster
@@ -101,17 +103,17 @@ else
         if have openssl; then
             pass "openssl present (self-signed certificate generation)"
         else
-            fail "openssl not found — required to generate certificates (tool/gen_certs.py)"
+            fail "openssl not found — required to generate certificates (tool/gen_certs_offline.py)"
         fi
         if have python3; then
-            pass "python3 present (tool/gen_certs.py)"
+            pass "python3 present (tool/gen_certs_offline.py)"
         else
-            fail "python3 not found — required to generate certificates (tool/gen_certs.py)"
+            fail "python3 not found — required to generate certificates (tool/gen_certs_offline.py)"
         fi
-        if [ -x "$BUNDLE_DIR/tool/gen_certs.py" ] || [ -f "$BUNDLE_DIR/tool/gen_certs.py" ]; then
-            pass "tool/gen_certs.py bundled"
+        if [ -x "$REPO_ROOT/tool/gen_certs_offline.py" ] || [ -f "$REPO_ROOT/tool/gen_certs_offline.py" ]; then
+            pass "tool/gen_certs_offline.py bundled"
         else
-            fail "tool/gen_certs.py missing from the bundle"
+            fail "tool/gen_certs_offline.py missing from the bundle"
         fi
     fi
 fi
