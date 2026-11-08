@@ -261,6 +261,21 @@ bundles the three component charts (`operator/openan-operator/Dockerfile` copies
 take effect after `make openan-operator-image` without publishing. `make openan-clean` only removes a client-side `openan`
 repo entry if you added one by hand.
 
+**Not installable from the Canvas Portal.** Installing `openan-operator` from the portal's `/components/deploy` page fails with
+`customresourcedefinitions.apiextensions.k8s.io is forbidden: User "system:serviceaccount:canvas-portal:canvas-portal-backend-sa"
+cannot create resource "customresourcedefinitions" ... at the cluster scope`. This is by design on both sides, not a bug:
+
+- The portal backend runs `helm upgrade --install` as its own ServiceAccount, which has the `admin` ClusterRole only through
+  RoleBindings in `rbac.canvasInstallAccess.targetNamespaces` (`components` and `canvas` in `portal-values.yaml.tpl`), plus
+  `oda.tmforum.org` access. It cannot create cluster-scoped objects, so it installs namespaced charts (ODA Components) only.
+- `openan-operator` is an operator chart: besides the `OpenAN` CRD (`crds/openans.yaml`) it creates a ClusterRole and a
+  ClusterRoleBinding (`templates/rbac.yaml`), so `--skip-crds` would only move the failure to the ClusterRole.
+
+Install the operator as a cluster admin (`make openan-operator`, or `helm install` with your own kubeconfig), like the Canvas
+operators. Granting the portal ServiceAccount the right to create CRDs, ClusterRoles and ClusterRoleBindings is effectively
+cluster-admin and defeats the portal's namespaced design. On kind a portal install would also miss the operator image (built and
+`kind load`ed by `make openan-operator-image`, not pulled) and conflict with the release `make openan-operator` manages.
+
 Demo limits: Agent Cards are ES256-signed (`cardSync.signing.enabled: true` in `openan-cr.yaml.tpl`); the Registry verifies them with keys from the operator-maintained trust ConfigMap (`<cr>-registry-trust`), so no HTTPS `jku` endpoint is needed (the ConfigMap is created when the first a2a Agent Card is fetched, so it is absent until then, e.g. while `sample-agent` is in `ImagePullBackOff`). The Registry mounts it as optional, so the first publish can get `401 no valid signature with a trusted key` until the kubelet syncs the mount into the pod (about a minute); the operator retries and then succeeds. RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
 (`values.podSecurityContext`).
 
