@@ -22,8 +22,41 @@ spec:
       - name: prepare-runtime
         image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+        {{- $psc := .Values.podSecurityContext | default dict }}
+        {{- $uidSet := not (kindIs "invalid" $psc.runAsUser) }}
+        {{- if and .Values.persistence.prepareAsRoot $uidSet }}
+        {{- $uid := int $psc.runAsUser }}
+        {{- $gid := $uid }}
+        {{- if not (kindIs "invalid" $psc.runAsGroup) }}{{ $gid = int $psc.runAsGroup }}{{ end }}
+        {{- if or (le $uid 0) (le $gid 0) }}{{ fail "podSecurityContext.runAsUser/runAsGroup must be positive integers when persistence.prepareAsRoot is true" }}{{ end }}
+        # Runs as root: a hostPath/local PV root is typically root:root 0755 and kubelet does not apply fsGroup
+        # to it, so the app user cannot create data/ and log/. Root creates them and hands them to the pod's
+        # runAsUser/runAsGroup (published images run as 1000, source builds as 10001). If root cannot change
+        # ownership (e.g. NFS root_squash), it falls back to creating them as the app user, like the non-root
+        # init. Set persistence.prepareAsRoot=false where fsGroup works and Pod Security "restricted" applies.
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          # chgrp on the volume root first: if root cannot change ownership, nothing is created as root.
+          if chgrp {{ $gid }} /runtime && chmod 1770 /runtime && mkdir -p /runtime/data /runtime/log \
+            && chown {{ $uid }}:{{ $gid }} /runtime/data /runtime/log && chmod 0770 /runtime/data /runtime/log; then
+            echo "prepare-runtime: data/ and log/ owned by {{ $uid }}:{{ $gid }}"
+          else
+            echo "prepare-runtime: cannot set ownership as root (e.g. NFS root_squash); creating as {{ $uid }}:{{ $gid }}" >&2
+            exec python -c "import os; from pathlib import Path; os.getuid() == 0 and (os.setgroups([]), os.setgid({{ $gid }}), os.setuid({{ $uid }})); ds = [Path('/runtime', p) for p in ('data', 'log')]; [d.mkdir(mode=0o770, exist_ok=True) for d in ds]; [d.chmod(0o770) for d in ds if d.stat().st_uid == os.getuid()]"
+          fi
+        securityContext:
+          runAsUser: 0
+          runAsNonRoot: false
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL], add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]}
+        {{- else }}
+        # Non-root: relies on the volume being writable for the pod user (e.g. fsGroup applied by the CSI driver).
         command: ["python", "-c", "from pathlib import Path; [Path('/runtime', p).mkdir(mode=0o770, exist_ok=True) for p in ('data', 'log')]"]
         securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        {{- end }}
         volumeMounts:
         - {name: runtime, mountPath: /runtime}
       containers:

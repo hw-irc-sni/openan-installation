@@ -140,3 +140,88 @@ def test_generated_env_list_matches_the_templates_and_wins_over_extra_env(chart,
     cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-config"))
     assert set(cm["data"]) == set(stack.GENERATED_ENV[comp])  # list in the operator == keys the template generates
     assert "attacker" not in cm["data"].values()  # generated values win over every colliding extraEnv entry
+
+
+
+RUNTIME_CHARTS = ["openan-registry-center", "openan-orchestration-center"]
+
+
+def _runtime_pod(chart, settings=None):
+    docs = render(chart, settings)
+    return next(d for d in docs if d["kind"] == "Deployment")["spec"]["template"]["spec"]
+
+
+@pytest.mark.parametrize("chart", RUNTIME_CHARTS)
+@pytest.mark.parametrize("uid,gid", [(10001, 10001), (1000, 1000), (1000, 2000)])
+def test_prepare_runtime_runs_as_root_with_minimal_caps_and_chowns_to_pod_user(chart, uid, gid):
+    # A hostPath/local PV root is root:root 0755 and ignores fsGroup, so the app user cannot create
+    # data/ and log/ itself (mirrors upstream a27e74b); the owner must follow podSecurityContext.
+    pod = _runtime_pod(chart, {"podSecurityContext.runAsUser": uid, "podSecurityContext.runAsGroup": gid,
+                               "podSecurityContext.runAsNonRoot": "true"})
+    assert (pod["securityContext"]["runAsUser"], pod["securityContext"]["runAsGroup"]) == (uid, gid)
+    init = pod["initContainers"][0]
+    assert init["name"] == "prepare-runtime" and init["image"] == pod["containers"][0]["image"]
+    assert init["command"][:2] == ["/bin/sh", "-c"]
+    sc = init["securityContext"]
+    # runAsNonRoot: false overrides a pod-level runAsNonRoot: true, which would otherwise block the init.
+    assert sc["runAsUser"] == 0 and sc["runAsNonRoot"] is False and sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"] == {"drop": ["ALL"], "add": ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]}
+    for c in pod["containers"]:  # app containers inherit the pod user; none may override it
+        assert "runAsUser" not in c.get("securityContext", {}), c["name"]
+    script = init["command"][2]
+    assert f"chown {uid}:{gid} /runtime/data /runtime/log" in script and f"chgrp {gid} /runtime" in script
+    assert f"os.setgid({gid}), os.setuid({uid})" in script
+
+
+def _run_prepare_runtime(chart, tmp_path, path_dirs=()):
+    # Render for the current uid/gid so the ownership commands also run (and must succeed) on non-root CI.
+    uid, gid = (os.getuid(), os.getgid()) if os.getuid() else (10001, 10001)
+    script = _runtime_pod(chart, {"podSecurityContext.runAsUser": uid, "podSecurityContext.runAsGroup": gid}
+                          )["initContainers"][0]["command"][2]
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    env = dict(os.environ, PATH=os.pathsep.join([*map(str, path_dirs), os.environ["PATH"]]))
+    res = subprocess.run(["/bin/sh", "-c", script.replace("/runtime", str(runtime))],
+                         capture_output=True, text=True, env=env, timeout=30)
+    assert res.returncode == 0, res.stderr
+    for sub in ("data", "log"):
+        st = (runtime / sub).stat()
+        assert (st.st_uid, st.st_gid) == (uid, gid) and st.st_mode & 0o777 == 0o770
+    return runtime, res
+
+
+@pytest.mark.parametrize("chart", RUNTIME_CHARTS)
+def test_prepare_runtime_script_sets_ownership_and_modes(chart, tmp_path):
+    runtime, res = _run_prepare_runtime(chart, tmp_path)
+    assert runtime.stat().st_mode & 0o7777 == 0o1770 and "owned by" in res.stdout
+
+
+@pytest.mark.parametrize("chart", RUNTIME_CHARTS)
+def test_prepare_runtime_falls_back_to_the_pod_user_when_ownership_changes_are_refused(chart, tmp_path):
+    # NFS root_squash: root cannot chown, so the init must not crash-loop but create the dirs as the pod user.
+    if not shutil.which("python"):
+        pytest.skip("python not on PATH")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    for tool in ("chown", "chgrp"):
+        (stub / tool).write_text("#!/bin/sh\nexit 1\n")
+        (stub / tool).chmod(0o755)
+    runtime, res = _run_prepare_runtime(chart, tmp_path, [stub])
+    assert runtime.stat().st_mode & 0o7777 != 0o1770  # the root step stopped before touching anything
+    assert "cannot set ownership as root" in res.stderr
+
+
+@pytest.mark.parametrize("chart", RUNTIME_CHARTS)
+@pytest.mark.parametrize("settings", [{"persistence.prepareAsRoot": "false"}, {"podSecurityContext": "null"}])
+def test_prepare_runtime_stays_non_root_when_disabled_or_without_a_pod_user(chart, settings):
+    # Pod Security "restricted" (fsGroup-capable storage) or images that rely on their own USER.
+    init = _runtime_pod(chart, settings)["initContainers"][0]
+    assert init["command"][:2] == ["python", "-c"]
+    assert init["securityContext"] == {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}}
+
+
+@pytest.mark.parametrize("chart", RUNTIME_CHARTS)
+@pytest.mark.parametrize("key,bad", [("runAsUser", "0"), ("runAsUser", "abc"), ("runAsUser", "-1"), ("runAsGroup", "0")])
+def test_prepare_runtime_rejects_non_positive_pod_user(chart, key, bad):
+    err = render(chart, {f"podSecurityContext.{key}": bad}, success=False)
+    assert "must be positive integers" in err

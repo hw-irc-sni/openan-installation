@@ -37,6 +37,10 @@ registry:
 persistence:
   size: 5Gi
   storageClassName: ""
+  # prepare-runtime runs as root to create data/ and log/ owned by podSecurityContext.runAsUser/runAsGroup
+  # (needed on hostPath/local PVs, which ignore fsGroup). false keeps it non-root for Pod Security "restricted";
+  # the volume must then be writable for the pod user. Without podSecurityContext.runAsUser it is always non-root.
+  prepareAsRoot: true
 resources: {}
 # Must match the image's user (source builds use 10001; older published images run as 1000).
 podSecurityContext: {runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001}

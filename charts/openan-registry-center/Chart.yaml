@@ -2,6 +2,8 @@ apiVersion: v2
 name: openan-registry-center
 description: OpenAN Registry Center packaged as an ODA Component (A2A Agent Card registry)
 type: application
-version: 0.1.0
+version: 0.1.1
 # version: 0.1.0 - Initial ODA Component packaging of the Registry Center
+# version: 0.1.1 - prepare-runtime runs as root (minimal caps) and chowns data/log to the pod user;
+#   persistence.prepareAsRoot=false keeps the non-root init
 appVersion: "v1"
