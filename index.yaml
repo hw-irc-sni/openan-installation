@@ -26,6 +26,17 @@ entries:
   openan-orchestration-center:
   - apiVersion: v2
     appVersion: v1
+    created: "2026-11-08T19:00:07.626189401Z"
+    description: OpenAN Orchestration Center packaged as an ODA Component (workflow
+      generation and execution)
+    digest: 8e275e67e56d9acd2de0a9ec62154a51736e7981b18bb6d5ad78aa7f5503e9e3
+    name: openan-orchestration-center
+    type: application
+    urls:
+    - https://github.com/hw-irc-sni/openan-installation/releases/download/openan-orchestration-center-0.1.1/openan-orchestration-center-0.1.1.tgz
+    version: 0.1.1
+  - apiVersion: v2
+    appVersion: v1
     created: "2026-11-02T11:08:17.926032476Z"
     description: OpenAN Orchestration Center packaged as an ODA Component (workflow
       generation and execution)
@@ -38,6 +49,17 @@ entries:
   openan-registry-center:
   - apiVersion: v2
     appVersion: v1
+    created: "2026-11-08T19:00:07.860324834Z"
+    description: OpenAN Registry Center packaged as an ODA Component (A2A Agent Card
+      registry)
+    digest: 8cc7512c63cb91eacca2855bd246bec0f0583702e2adc1a68e1e0eaf492525d4
+    name: openan-registry-center
+    type: application
+    urls:
+    - https://github.com/hw-irc-sni/openan-installation/releases/download/openan-registry-center-0.1.1/openan-registry-center-0.1.1.tgz
+    version: 0.1.1
+  - apiVersion: v2
+    appVersion: v1
     created: "2026-11-02T11:08:18.134138667Z"
     description: OpenAN Registry Center packaged as an ODA Component (A2A Agent Card
       registry)
@@ -47,4 +69,4 @@ entries:
     urls:
     - https://github.com/hw-irc-sni/openan-installation/releases/download/openan-registry-center-0.1.0/openan-registry-center-0.1.0.tgz
     version: 0.1.0
-generated: "2026-11-02T11:08:18.13415109Z"
+generated: "2026-11-08T19:00:07.860332435Z"
