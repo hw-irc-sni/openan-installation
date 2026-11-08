@@ -140,3 +140,39 @@ def test_generated_env_list_matches_the_templates_and_wins_over_extra_env(chart,
     cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-config"))
     assert set(cm["data"]) == set(stack.GENERATED_ENV[comp])  # list in the operator == keys the template generates
     assert "attacker" not in cm["data"].values()  # generated values win over every colliding extraEnv entry
+
+
+@pytest.mark.parametrize("chart", ["openan-registry-center", "openan-orchestration-center"])
+@pytest.mark.parametrize("uid,gid", [(10001, 10001), (1000, 1000)])
+def test_prepare_runtime_runs_as_root_with_minimal_caps_and_chowns_to_pod_user(chart, uid, gid, tmp_path):
+    # A hostPath/local PV root is root:root 0755 and ignores fsGroup, so the app user cannot create
+    # data/ and log/ itself (mirrors upstream a27e74b), but the owner must follow podSecurityContext.
+    docs = render(chart, {"podSecurityContext.runAsUser": uid, "podSecurityContext.runAsGroup": gid})
+    pod = next(d for d in docs if d["kind"] == "Deployment")["spec"]["template"]["spec"]
+    init = pod["initContainers"][0]
+    assert init["name"] == "prepare-runtime" and init["image"] == pod["containers"][0]["image"]
+    assert init["command"][:2] == ["/bin/sh", "-c"]
+    sc = init["securityContext"]
+    assert sc["runAsUser"] == 0 and sc["allowPrivilegeEscalation"] is False
+    assert sc["capabilities"] == {"drop": ["ALL"], "add": ["CHOWN", "DAC_OVERRIDE", "FOWNER"]}
+    for c in pod["containers"]:
+        assert c["securityContext"].get("runAsUser") != 0, c["name"]
+    script = init["command"][2]
+    assert f"chown {uid}:{gid} /runtime/data /runtime/log" in script and f"chgrp {gid} /runtime" in script
+    # Execute it against a local volume root; ownership changes need root, so drop them otherwise.
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    lines = [l for l in script.replace("/runtime", str(runtime)).splitlines()
+             if os.geteuid() == 0 or not l.strip().startswith(("chown", "chgrp"))]
+    subprocess.run(["/bin/sh", "-c", "\n".join(lines)], check=True, timeout=10)
+    for sub in ("data", "log"):
+        assert (runtime / sub).is_dir() and (runtime / sub).stat().st_mode & 0o777 == 0o770
+        if os.geteuid() == 0:
+            assert ((runtime / sub).stat().st_uid, (runtime / sub).stat().st_gid) == (uid, gid)
+
+
+@pytest.mark.parametrize("chart", ["openan-registry-center", "openan-orchestration-center"])
+@pytest.mark.parametrize("bad", ["0", "abc", "-1"])
+def test_prepare_runtime_rejects_non_positive_pod_user(chart, bad):
+    err = render(chart, {"podSecurityContext.runAsUser": bad}, success=False)
+    assert "must be positive integers" in err

@@ -22,8 +22,27 @@ spec:
       - name: prepare-runtime
         image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
-        command: ["python", "-c", "from pathlib import Path; [Path('/runtime', p).mkdir(mode=0o770, exist_ok=True) for p in ('data', 'log')]"]
-        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        # Runs as root: a hostPath/local PV root is typically root:root 0755 and kubelet does not apply fsGroup
+        # to it, so the app user cannot create data/ and log/. Root creates them and hands them to the pod's
+        # runAsUser/runAsGroup (not a hard-coded uid: published images run as 1000, source builds as 10001).
+        # Only the capabilities this needs are kept.
+        {{- $uid := int .Values.podSecurityContext.runAsUser }}
+        {{- $gid := int (.Values.podSecurityContext.runAsGroup | default .Values.podSecurityContext.runAsUser) }}
+        {{- if or (le $uid 0) (le $gid 0) }}{{ fail "podSecurityContext.runAsUser/runAsGroup must be positive integers" }}{{ end }}
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          mkdir -p /runtime/data /runtime/log
+          chown {{ $uid }}:{{ $gid }} /runtime/data /runtime/log
+          chmod 0770 /runtime/data /runtime/log
+          chgrp {{ $gid }} /runtime
+          chmod 1770 /runtime
+        securityContext:
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL], add: [CHOWN, DAC_OVERRIDE, FOWNER]}
         volumeMounts:
         - {name: runtime, mountPath: /runtime}
       containers:
