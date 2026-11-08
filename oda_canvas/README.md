@@ -246,6 +246,21 @@ make bootstrap-openan        # openan-operator-image, openan-operator, openan-sa
 make openan-clean            # remove everything the openan-* targets created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
 ```
 
+**Helm repository.** The charts in `charts/` (`openan-operator`, `openan-registry-center`, `openan-orchestration-center`,
+`openan-frontend`) are also published as a Helm repository on GitHub Pages (`gh-pages` branch, by
+`.github/workflows/release-charts.yml`; see the repository `README.md`):
+
+```bash
+helm repo add openan https://hw-irc-sni.github.io/openan-installation
+helm repo update
+helm search repo openan
+```
+
+The demo does not use it: `make openan-operator` installs `charts/openan-operator` from the checkout, and the operator image
+bundles the three component charts (`operator/openan-operator/Dockerfile` copies them to `/charts`), so local chart changes
+take effect after `make openan-operator-image` without publishing. `make openan-clean` only removes a client-side `openan`
+repo entry if you added one by hand.
+
 Demo limits: Agent Cards are ES256-signed (`cardSync.signing.enabled: true` in `openan-cr.yaml.tpl`); the Registry verifies them with keys from the operator-maintained trust ConfigMap (`<cr>-registry-trust`), so no HTTPS `jku` endpoint is needed (the ConfigMap is created when the first a2a Agent Card is fetched, so it is absent until then, e.g. while `sample-agent` is in `ImagePullBackOff`). The Registry mounts it as optional, so the first publish can get `401 no valid signature with a trusted key` until the kubelet syncs the mount into the pod (about a minute); the operator retries and then succeeds. RC `v1.1.2` runs as uid 10001 and OC `v1.0.0` as 1000
 (`values.podSecurityContext`).
 
