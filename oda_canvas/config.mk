@@ -5,8 +5,9 @@ CANVAS_NS=canvas
 COMPONENTS_NS=components
 RELEASE=canvas-portal
 
-# canvas-portal-v2 chart source (tmforum-oda/oda-canvas checkout).
-PORTAL_SRC=../../../tmforum-oda/oda-canvas/canvas-portal-v2
+# canvas-portal-v2 chart source (tmforum-oda/oda-canvas checkout). merged-demo combines the ai-gateways and ai-registries
+# work: the AI Gateways settings in portal-values.yaml.tpl need chart 0.1.3 or later, and older charts ignore them.
+PORTAL_SRC=../../../tmforum-oda/oda-canvas-merged-demo/canvas-portal-v2
 
 # Images. The tmforumodacanvas/canvas-portal tags are not published, so by default build
 # from PORTAL_SRC and `kind load` them. Set PORTAL_BUILD=false to pull instead.
@@ -91,3 +92,12 @@ OPENAN_LLM_URL=$(OPENAN_LLM_BASE_URL)/chat/completions
 OPENAN_LLM_MODEL=Qwen/Qwen3.8-27B-FP8
 # Sample-A2A-T-Agent image (built from ./sample-agent and loaded into kind)
 OPENAN_SAMPLE_AGENT_IMAGE=openan-sample-a2a-t-agent:0.1.0
+
+# AI gateway (`make agentgateway`, part of `make bootstrap-openan`): charts/agentgateway and the test MCP server it routes to.
+# Not every Canvas branch has the chart, so this is a separate checkout: merged-demo combines ai-gateways and ai-registries.
+AGENTGATEWAY_SRC=../../../tmforum-oda/oda-canvas-merged-demo
+# The portal's AI Gateways settings (aiGateways.configNamespace, the gateway URLs) assume the gateway runs in the Canvas namespace.
+AGENTGATEWAY_NS=$(CANVAS_NS)
+# Must match charts/agentgateway/values.yaml (agentgateway-standalone.image and testMcpServer.image).
+AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway:v1.7.0
+TEST_MCP_SERVER_IMAGE=tmforumodacanvas/test-mcp-server:0.1.0

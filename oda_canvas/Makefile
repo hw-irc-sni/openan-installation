@@ -39,7 +39,8 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
 .PHONY: bootstrap-oda-canvas canvas-portal environment oda-canvas observability preflight check check-secrets check-portal \
         cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
-        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify openan-clean bootstrap-openan openan-credentials
+        oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify openan-clean bootstrap-openan openan-credentials \
+        agentgateway-image agentgateway
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -226,7 +227,8 @@ portal-realm:
 
 portal:
 	@mkdir -p .rendered
-	@envsubst < portal-values.yaml.tpl > $(VALUES)
+	@AGENTGATEWAY_API_KEY=$$(kubectl -n $(AGENTGATEWAY_NS) get secret agentgateway-portal-key -o jsonpath='{.data.key}' 2>/dev/null | base64 -d); \
+	  export AGENTGATEWAY_API_KEY; envsubst < portal-values.yaml.tpl > $(VALUES)
 	helm upgrade --install $(RELEASE) $(PORTAL_SRC)/helm/canvas-portal \
 	  -n $(PORTAL_NS) --create-namespace -f $(VALUES) --wait --timeout 5m
 
@@ -359,18 +361,82 @@ openan-verify:
 	  kubectl -n $(OPENAN_NS) exec deploy/openan-registry-center-registry-center -c registry-center -- python -c "import urllib.request as u;r=u.Request('http://127.0.0.1:5000/rest/v1/registry-center/agent-cards',headers={'Authorization':'Bearer $$TOKEN'});print(u.urlopen(r).read().decode())" 2>/dev/null | grep -q "Sample-A2A-T-Agent" && { echo "agent card registered"; exit 0; }; \
 	  sleep 15; done; echo "agent card NOT found in the Registry Center"; exit 1
 
+# ---- AI gateway (agentgateway) -------------------------------------------------------------------------
+# charts/agentgateway from AGENTGATEWAY_SRC with its kind overlay (values-kind.yaml): the OpenAN LLM as model, the test MCP
+# server, and an A2A route to the Sample-A2A-T-Agent (/agents/sample-agent). The release must be called "agentgateway":
+# values-kind.yaml names the test MCP server's Service after it. Part of `make bootstrap-openan`.
+AGW_RELEASE := agentgateway
+AGW_CHART := $(AGENTGATEWAY_SRC)/charts/agentgateway
+AGW_LIVE_VALUES := .rendered/agentgateway-live-values.json
+
+# The kind nodes cannot pull: pull the gateway image, build the test MCP server (never published), load both.
+agentgateway-image:
+	@test -f $(AGW_CHART)/Chart.yaml || { echo "charts/agentgateway not found: set AGENTGATEWAY_SRC (now $(AGENTGATEWAY_SRC)) to a Canvas checkout with the AI gateway chart, e.g. merged-demo"; exit 1; }
+	docker image inspect $(AGENTGATEWAY_IMAGE) >/dev/null 2>&1 || docker pull $(AGENTGATEWAY_IMAGE)
+	docker image inspect $(TEST_MCP_SERVER_IMAGE) >/dev/null 2>&1 || docker build --build-arg HTTP_PROXY --build-arg HTTPS_PROXY \
+	  --build-arg NO_PROXY -t $(TEST_MCP_SERVER_IMAGE) $(AGENTGATEWAY_SRC)/source/utilities/test-mcp-server
+	@for i in $(AGENTGATEWAY_IMAGE) $(TEST_MCP_SERVER_IMAGE); do kind load docker-image $$i --name $(CLUSTER_NAME); done
+
+# First install: the model name and base URL come from OPENAN_LLM_*. A re-run instead keeps the models and MCP servers in the
+# live ConfigMap, which the Canvas Portal's AI Gateways page may have changed (otherwise Helm puts back the chart's lists, and
+# Helm 4 stops on the ConfigMap conflict). Helm applies --set-string after every -f file, so the per-index model overrides
+# would overwrite the portal's first model: they are passed on the first install only.
+agentgateway: agentgateway-image
+	@if helm dependency list $(AGW_CHART) 2>/dev/null | awk 'NR>1 && NF && $$NF!="ok"' | grep -q .; then \
+	  helm dependency build $(AGW_CHART) || helm dependency update $(AGW_CHART) || exit 1; fi
+	@mkdir -p .rendered
+	@if kubectl -n $(AGENTGATEWAY_NS) get configmap agentgateway-config >/dev/null 2>&1; then \
+	  kubectl -n $(AGENTGATEWAY_NS) get configmap agentgateway-config -o jsonpath='{.data.config\.yaml}' \
+	    | python3 scripts/agentgateway-live-values.py > $(AGW_LIVE_VALUES) || exit 1; \
+	  echo "agentgateway: keeping the live models and MCP servers"; \
+	  extra="-f $(AGW_LIVE_VALUES)"; \
+	else \
+	  extra="--set-string agentgateway-standalone.config.llm.models[0].name=$(OPENAN_LLM_MODEL) \
+	         --set-string agentgateway-standalone.config.llm.models[0].params.baseUrl=$(OPENAN_LLM_BASE_URL)"; \
+	fi; \
+	helm upgrade --install $(AGW_RELEASE) $(AGW_CHART) -n $(AGENTGATEWAY_NS) --create-namespace \
+	  -f $(AGW_CHART)/values-kind.yaml $$extra \
+	  --set-string 'agentgateway-standalone.config.routes[0].backends[0].host=sample-agent.$(OPENAN_NS).svc.cluster.local:8080' \
+	  $(HELM_FORCE) --wait --timeout 5m
+	@kubectl -n $(AGENTGATEWAY_NS) get pods -l app.kubernetes.io/instance=$(AGW_RELEASE)
+	@kubectl -n $(AGENTGATEWAY_NS) get pods -l app=$(AGW_RELEASE)-test-mcp-server
+	@# The portal reads the config port with the key in agentgateway-portal-key. `make portal` renders it only if the gateway
+	@# already exists (bootstrap-oda-canvas runs first), and a new gateway install generates a new key: give the portal the
+	@# current key, keeping every other portal value. Only with the chart the release was installed from (same version):
+	@# another PORTAL_SRC could drop pages its chart does not know.
+	@key=$$(kubectl -n $(AGENTGATEWAY_NS) get secret agentgateway-portal-key -o jsonpath='{.data.key}'); \
+	kubectl -n $(PORTAL_NS) get secret $(RELEASE)-backend >/dev/null 2>&1 || { echo "portal not deployed: 'make portal' picks up the gateway key"; exit 0; }; \
+	pkey=$$(kubectl -n $(PORTAL_NS) get secret $(RELEASE)-backend -o jsonpath='{.data.AGENTGATEWAY_API_KEY}'); \
+	[ "$$pkey" = "$$key" ] && { echo "portal: AGENTGATEWAY_API_KEY up to date"; exit 0; }; \
+	dep=$$(helm list -n $(PORTAL_NS) -f '^$(RELEASE)$$' -o json | python3 -c 'import sys,json;print((json.load(sys.stdin) or [{}])[0].get("chart",""))'); \
+	src=canvas-portal-$$(helm show chart $(PORTAL_SRC)/helm/canvas-portal | awk '/^version:/{print $$2}'); \
+	if [ "$$dep" = "$$src" ]; then \
+	  echo "portal: updating AGENTGATEWAY_API_KEY to the gateway's key"; \
+	  helm upgrade $(RELEASE) $(PORTAL_SRC)/helm/canvas-portal -n $(PORTAL_NS) --reset-then-reuse-values \
+	    --set-string backend.secretEnv.AGENTGATEWAY_API_KEY="$$(echo $$key | base64 -d)" --wait --timeout 5m; \
+	else \
+	  echo "WARNING: the portal's AGENTGATEWAY_API_KEY is not the gateway's key, so its AI Gateways page is unauthorized."; \
+	  echo "  Not updated: release $(RELEASE) is $$dep, PORTAL_SRC has $$src. With the portal's own chart:"; \
+	  echo "  helm upgrade $(RELEASE) <chart> -n $(PORTAL_NS) --reset-then-reuse-values --set-string backend.secretEnv.AGENTGATEWAY_API_KEY=\$$(kubectl -n $(AGENTGATEWAY_NS) get secret agentgateway-portal-key -o jsonpath='{.data.key}' | base64 -d)"; \
+	fi
+	@echo "agentgateway: http://agentgateway.$(AGENTGATEWAY_NS).svc.cluster.local (/v1/chat/completions, /mcp, /agents/sample-agent)"
+
 # Remove everything the openan-* targets created in the cluster, so a new OpenAN deployment can start from scratch. Order
 # matters: the operator must still run while the sample card and the OpenAN CR are deleted (its finalizers remove the
 # Registry card, uninstall the Registry/Orchestration/portal releases and delete their data PVCs).
-#   1. the detached port-forward           4. the OpenAN CR (-> the three component releases, PVCs, Secrets, trust ConfigMap)
-#   2. the portal route                    5. the operator release and the OpenAN CRD
-#   3. the sample agent Component          6. leftovers by label, then the `openan` Helm repo (client side, if present)
+#   1. the detached port-forward           5. the OpenAN CR (-> the three component releases, PVCs, Secrets, trust ConfigMap)
+#   2. the portal route                    6. the operator release and the OpenAN CRD
+#   3. the agentgateway release            7. leftovers by label, then the `openan` Helm repo (client side, if present)
+#   4. the sample agent Component
 # Not touched: the Canvas, the namespaces (components and the operator's namespace are shared with the Canvas), the
 # `pc` reference component, and local Docker images / images already loaded into kind (not Kubernetes resources).
+# The agentgateway-llm-keys Secret (model API keys set from the portal) stays by design (helm.sh/resource-policy: keep). The
+# agentgateway-portal-key Secret goes, so the next install has a new key: `make agentgateway` gives it to the portal.
 OPENAN_HELM_REPO := openan
 openan-clean:
 	-@$(PF) stop openan
 	kubectl delete -f manifests/openan/portal-virtualservice.yaml --ignore-not-found
+	helm uninstall $(AGW_RELEASE) -n $(AGENTGATEWAY_NS) --ignore-not-found
 	kubectl delete -f manifests/openan/sample-a2a-agent.yaml.tpl --ignore-not-found --timeout=3m
 	@# The operator's finalizers do the teardown: without a running operator this wait times out instead of leaking releases.
 	kubectl -n $(OPENAN_NS) delete openan --all --ignore-not-found --timeout=5m \
@@ -386,7 +452,8 @@ openan-clean:
 
 # The whole OpenAN start sequence, on top of a running Canvas (`make bootstrap-oda-canvas`). Order matters:
 #   images -> operator + OpenAN CR (Registry Center, Orchestration Center, portal) -> sample agent (waits for its card) ->
-#   portal route LAST (a catch-all "/" on the Istio gateway must be the newest route) -> detached portal port-forward.
+#   agentgateway (routes to the sample agent) -> portal route LAST (a catch-all "/" on the Istio gateway must be the newest
+#   route) -> detached portal port-forward.
 # Undo with `make openan-clean`. The gateway route is reachable through `make oda-canvas-port-forward` (ingress ports).
 bootstrap-openan:
 	@kubectl get crd components.oda.tmforum.org >/dev/null 2>&1 && kubectl -n $(CANVAS_NS) get statefulset canvas-keycloak >/dev/null 2>&1 \
@@ -394,8 +461,9 @@ bootstrap-openan:
 	$(MAKE) openan-operator-image
 	$(MAKE) openan-operator
 	$(MAKE) openan-sample
+	$(MAKE) agentgateway
 	$(MAKE) openan-portal-route
-	@echo; echo "OpenAN ready: operator, Registry Center, Orchestration Center, portal and Sample-A2A-T-Agent."
+	@echo; echo "OpenAN ready: operator, Registry Center, Orchestration Center, portal, Sample-A2A-T-Agent and agentgateway."
 	@echo "Portal through the gateway: https://<host>:$(INGRESS_HTTPS_PORT)/ (needs 'make oda-canvas-port-forward'); direct forward below."
 	@echo "Login: admin / a NEW password after every recycle: run 'make openan-credentials'."
 	$(MAKE) openan-port-forward

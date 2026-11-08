@@ -240,11 +240,30 @@ Components and publishes Canvas `a2a` ExposedAPIs as Agent Cards in the Registry
 make openan-operator-image   # build the operator image, pull RC/OC images, kind load them
 make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orchestration Center)
 make openan-sample           # Sample-A2A-T-Agent: builds its image (sample-agent/), loads it into kind, deploys it; waits until its card is in the Registry
+make agentgateway            # AI gateway (charts/agentgateway from AGENTGATEWAY_SRC): pulls/builds and loads its images, installs it in canvas
 make openan-portal-route     # portal on the Istio gateway at "/" (last: it is a catch-all route)
 # or all of it in the right order, on top of a running Canvas:
-make bootstrap-openan        # openan-operator-image, openan-operator, openan-sample, openan-portal-route, openan-port-forward
-make openan-clean            # remove everything the openan-* targets created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
+make bootstrap-openan        # openan-operator-image, openan-operator, openan-sample, agentgateway, openan-portal-route, openan-port-forward
+make openan-clean            # remove everything the openan-* targets and agentgateway created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
 ```
+
+**AI gateway.** `make agentgateway` installs the Canvas [agentgateway](https://github.com/agentgateway/agentgateway) chart as
+release `agentgateway` in `AGENTGATEWAY_NS` (`canvas`) with its kind overlay: the `OPENAN_LLM_*` model at `/v1/*`, the test MCP
+server at `/mcp`, and the Sample-A2A-T-Agent at `/agents/sample-agent`. The chart is not in every Canvas branch, so
+`AGENTGATEWAY_SRC` (`config.mk`) points at a checkout that has it, by default `oda-canvas-merged-demo`. Re-running it keeps the
+models and MCP servers changed from the Canvas Portal's AI Gateways page. `make openan-clean` uninstalls it; the
+`agentgateway-llm-keys` Secret stays.
+
+The portal is wired to it in `portal-values.yaml.tpl` (`backend.aiGateways.*`, `rbac.agentgatewayConfigAccess`, and
+`AGENTGATEWAY_API_KEY`, which `make portal` reads from the `agentgateway-portal-key` Secret). The portal is installed before
+the gateway, and a new gateway install generates a new key, so `make agentgateway` then gives the portal the current key with
+`helm upgrade --reset-then-reuse-values` (other portal values are kept). It only does so if the portal release runs the chart
+version in `PORTAL_SRC`; otherwise it prints the command. These settings need canvas-portal chart 0.1.3 or later, which is why
+`PORTAL_SRC` defaults to the `oda-canvas-merged-demo` checkout.
+
+**Registry Center in the portal.** `portal-values.yaml.tpl` also sets `backend.registryCenter.url` to the OpenAN Registry
+Center (`openan-registry-center-registry-center.$OPENAN_NS:5000`), for the portal's AI Registries > Agents section. The Registry
+Center only exists after `make bootstrap-openan`. No `REGISTRY_CENTER_TOKEN` is set.
 
 **Helm repository.** The charts in `charts/` (`openan-operator`, `openan-registry-center`, `openan-orchestration-center`,
 `openan-frontend`) are also published as a Helm repository on GitHub Pages (`gh-pages` branch, by
