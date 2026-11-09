@@ -17,6 +17,7 @@ spec:
       image: {repository: ghcr.io/project-openan/registry-center, tag: "${OPENAN_RC_TAG}"}
       registry: {publicBaseUrl: "${OPENAN_RC_PUBLIC_BASE_URL}"}
       tmf639: {enabled: ${OPENAN_TMF639_ENABLED}, specificationUrl: "${OPENAN_TMF639_SPEC_URL}"}
+      broadcast: {enabled: ${OPENAN_BROADCAST_ENABLED}, callbackAllowlist: "${OPENAN_BROADCAST_CALLBACK_HOSTS}"}
   orchestrationCenter:
     values:
       image: {repository: ghcr.io/project-openan/orchestration-center, tag: "${OPENAN_OC_TAG}"}

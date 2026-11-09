@@ -293,6 +293,7 @@ are unaffected.
 | `OPENAN_RC_PUBLIC_BASE_URL` | `https://$(INGRESS_ADDRESS)/openan-registry-center-registrycenter` | `registry.publicBaseUrl`, the base of TMF639 `href`s. |
 | `OPENAN_TMF639_ENABLED`, `OPENAN_TMF639_SPEC_URL` | `false`, empty | `tmf639.*` in the OpenAN CR. |
 | `OPENAN_ALLOWED_SPEC_URL_PREFIXES` | empty (operator default: `project-openan/registry-center` raw URLs) | Operator env `ALLOWED_SPEC_URL_PREFIXES`, for example to accept a fork's profile URL. |
+| `OPENAN_BROADCAST_ENABLED`, `OPENAN_BROADCAST_CALLBACK_HOSTS` | `false`, empty | `broadcast.*` in the OpenAN CR: native webhooks and, with TMF639, the `/hub` and its published events. The hosts (comma separated, required when enabled) are also passed to the operator as `ALLOWED_CALLBACK_HOSTS`. Callbacks must use `https`. |
 
 TMF639 from a `registry-center` checkout of the fork's `oda-integration` branch (before an upstream release). The profile
 URL follows the same branch, so it changes when the branch moves; use a commit or tag to pin it:
@@ -303,6 +304,9 @@ make openan-operator-image openan-operator OPENAN_RC_BUILD=true OPENAN_RC_TAG=sr
   OPENAN_TMF639_SPEC_URL=https://raw.githubusercontent.com/hw-irc-sni/registry-center/oda-integration/docs/openapi/tmf639-a2a-agent-v5.yaml \
   OPENAN_ALLOWED_SPEC_URL_PREFIXES=https://raw.githubusercontent.com/hw-irc-sni/registry-center/
 ```
+
+To enable the `/hub` as well, add `OPENAN_BROADCAST_ENABLED=true OPENAN_BROADCAST_CALLBACK_HOSTS=<host>[,<host>...]`
+with the host names of the `https` listeners that will subscribe.
 
 Through the OpenAN CR, the operator restricts these values:
 

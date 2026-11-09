@@ -93,6 +93,12 @@ OPENAN_RC_PUBLIC_BASE_URL=https://$(INGRESS_ADDRESS)/openan-registry-center-regi
 OPENAN_TMF639_ENABLED=false
 OPENAN_TMF639_SPEC_URL=
 OPENAN_ALLOWED_SPEC_URL_PREFIXES=
+# Change broadcast: native webhook subscriptions and, with OPENAN_TMF639_ENABLED, the TMF639 /hub and its published
+# events. OPENAN_BROADCAST_CALLBACK_HOSTS (comma-separated host names) is required when enabled; it becomes both
+# broadcast.callbackAllowlist in the CR and the operator's ALLOWED_CALLBACK_HOSTS. Callbacks must be https: a CR
+# cannot enable plain-HTTP callbacks.
+OPENAN_BROADCAST_ENABLED=false
+OPENAN_BROADCAST_CALLBACK_HOSTS=
 # No published Orchestration Center image matches the current API: it is built from OPENAN_OC_SRC.
 OPENAN_OC_TAG=src
 OPENAN_OC_SRC=../../orchestration-center

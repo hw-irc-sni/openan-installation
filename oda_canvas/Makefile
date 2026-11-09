@@ -323,12 +323,15 @@ endif
 	  kind load docker-image $$i --name $(CLUSTER_NAME); done
 
 openan-operator:
+	@if [ "$(OPENAN_BROADCAST_ENABLED)" = true ] && [ -z "$(strip $(OPENAN_BROADCAST_CALLBACK_HOSTS))" ]; then \
+	  echo "OPENAN_BROADCAST_ENABLED=true needs OPENAN_BROADCAST_CALLBACK_HOSTS" >&2; exit 1; fi
 	@# Helm only installs crds/ on first install, so apply the CRD explicitly (idempotent).
 	kubectl apply -f $(OPENAN_ROOT)/operator/openan-operator/crd/openan-crd.yaml
 	helm upgrade --install openan-operator $(OPENAN_ROOT)/charts/openan-operator -n $(OPENAN_OPERATOR_NS) --create-namespace \
 	  --set deployment.image=$(OPENAN_OPERATOR_IMAGE) --set deployment.version=$(OPENAN_OPERATOR_TAG) \
 	  --set deployment.monitoredNamespaces='$(OPENAN_NS)' \
 	  $(if $(OPENAN_ALLOWED_SPEC_URL_PREFIXES),--set-string 'configmap.extra.ALLOWED_SPEC_URL_PREFIXES=$(subst $(comma),\$(comma),$(OPENAN_ALLOWED_SPEC_URL_PREFIXES))') \
+	  $(if $(OPENAN_BROADCAST_CALLBACK_HOSTS),--set-string 'configmap.extra.ALLOWED_CALLBACK_HOSTS=$(subst $(comma),\$(comma),$(OPENAN_BROADCAST_CALLBACK_HOSTS))') \
 	  --wait --timeout 3m
 	@# `kind load` replaces the image under an unchanged tag: restart so the new build is the one running. `rollout status`
 	@# returns while the old pod is still terminating (it keeps reconciling for its 30 s grace period); two operators on
