@@ -14,7 +14,9 @@ Installation tooling (no application source) for OpenAN: Registry Center, Orches
 - `containerized/build/` — shared image builder (`build.sh [registry|orchestration|portal]`, `portal/` for the portal image + nginx `default.conf.template`).
 - `binary/` — historical VM/bare-metal installers; **not validated against the current auth/config contract**. Don't treat as supported.
 - `docs/en/*.en.md` + `docs/zh/*.zh.md` — bilingual installation guides and design docs per line; `docs/en/TRANSPORT_DEPLOYMENT.md` (+ `docs/zh/TRANSPORT_DEPLOYMENT.zh.md`) is the HTTP/HTTPS, auth, and database **deployment contract** — read before changing chart values, auth, or TLS behavior. Keep the zh version in sync.
-- `oda_canvas/` — currently empty (branch `oda-integration`).
+- `charts/` — ODA Component charts (`openan-registry-center`, `openan-orchestration-center`, `openan-frontend`) and the `openan-operator` chart, published as a Helm repo by `.github/workflows/release-charts.yml` (bump `Chart.yaml` `version` to publish). Separate from the online/offline charts above. `openan-registry-center` has optional TMFC012/TMF639 values and always sets `REGISTRY_PATH_PREFIX=/<componentName>` for the Canvas gateway (see its `README.md`).
+- `operator/openan-operator/` — kopf operator for the `OpenAN` CR: installs the three component charts (the image bundles `charts/`) and syncs a2a ExposedAPIs into the Registry Center. `stack.GENERATED_ENV` must list exactly the env keys the component ConfigMaps generate (a contract test checks it); `validate_values` is the CR policy (image/spec-URL prefixes, callback hosts, operator-controlled keys).
+- `oda_canvas/` — kind demo of the ODA Canvas plus OpenAN (branch `oda-integration`): `Makefile` with settings in `config.mk` (`make bootstrap-oda-canvas`, then `make bootstrap-openan`). Also the TMF639 facade plan (`TMF639-FACADE-PLAN.md`) and upstream Canvas issue drafts.
 
 Because online and offline-k8s charts are duplicated, a fix in one template often needs mirroring in the other (check both `online-install/openan-chart/templates/` and `offline-install/chart/templates/`).
 
@@ -25,6 +27,8 @@ pip install pytest pyyaml cryptography     # CI deps; tests also need helm v3.19
 python -m pytest tests/ -q                 # full contract suite (what CI runs)
 python -m pytest tests/test_offline_chart_contract.py -q            # one file
 python -m pytest tests/test_deployment_contract.py -q -k <name>     # one test
+pip install kopf kubernetes httpx prometheus-client bcrypt           # extra CI deps for the operator tests
+python -m pytest operator/openan-operator/tests -q                   # operator unit tests
 
 # Shell syntax checks CI runs
 bash -n containerized/online-install/install.sh
@@ -42,6 +46,7 @@ Tests are "contract" tests: they render charts with `helm template` and assert o
 
 ## Key contract points
 
+- ODA component charts: changing generated ConfigMap keys means updating `GENERATED_ENV` in `operator/openan-operator/src/stack.py`. `tmf639.specificationUrl` must be the release-independent registry-center profile (`tmf639-a2a-agent-v5.yaml`), never the canonical TMF OAS URL, because the Canvas resolves dependencies by exact URL.
 - Image tags have no usable chart default: enabled `registry/orchestration/frontend.image.tag` must be set explicitly. Tags and source revisions are independent.
 - CI pins accepted org source revisions of registry-center and orchestration-center in `.github/workflows/deployment-contract.yml`; update those pins when adopting newer service revisions (not personal forks).
 - OC runs single-replica until shared sessions exist. `namespace` value must equal Helm `--namespace`; resource names are fixed → one stack per namespace.
