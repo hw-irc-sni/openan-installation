@@ -7,9 +7,9 @@
 {{- $catalog := eq (include "rc.catalog" .) "true" }}
 {{- if $tmf639 }}
 {{- if not .Values.tmf639.specificationUrl }}{{ fail "tmf639.specificationUrl is required when tmf639.enabled (the release-independent TMF639 profile URL)" }}{{- end }}
-{{- /* Canvas resolves dependencies by exact specification URL: declaring the canonical TMF OAS
-       would make this component the TMF639 provider for every other component in the cluster. */}}
-{{- if contains "tmf-open-api-table-documents" .Values.tmf639.specificationUrl }}{{ fail "tmf639.specificationUrl must not be the canonical TMF639 OAS URL; use the Registry Center profile URL" }}{{- end }}
+{{- /* Canvas resolves dependencies by exact specification URL: declaring the canonical TMF OAS (or any other
+       component's spec) would make this component its provider. Only the Registry Center profile is accepted. */}}
+{{- if not (and (hasPrefix "https://" .Values.tmf639.specificationUrl) (hasSuffix "/tmf639-a2a-agent-v5.yaml" .Values.tmf639.specificationUrl)) }}{{ fail "tmf639.specificationUrl must be an https URL of the Registry Center profile tmf639-a2a-agent-v5.yaml (never the canonical TMF639 OAS)" }}{{- end }}
 {{- end }}
 {{- if and $broadcast (not .Values.broadcast.callbackAllowlist) }}{{ fail "broadcast.callbackAllowlist is required when broadcast.enabled" }}{{- end }}
 {{- if and $catalog (not .Values.catalog.specificationUrl) }}{{ fail "catalog.specificationUrl is required when catalog.enabled" }}{{- end }}

@@ -523,3 +523,35 @@ def test_helm_parses_nanosecond_timestamps():
     from src import helm_driver as drv
     assert drv._parse_time("2026-11-02T21:51:17.570140138Z").microsecond == 570140
     assert drv._parse_time("2026-11-02T21:09:50.5Z").microsecond == 500000
+
+
+PROFILE = "https://raw.githubusercontent.com/project-openan/registry-center/v1.2.0/docs/openapi/tmf639-a2a-agent-v5.yaml"
+
+
+def test_tmf639_profile_url_must_come_from_an_allowed_prefix():
+    stack.validate_values("registryCenter", {"tmf639": {"enabled": True, "specificationUrl": PROFILE}})
+    for url in ("https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF639_Resource_Inventory/"
+                "5.0.0/swagger/TMF639-Resource_Inventory_Management-v5.0.0.oas.yaml",
+                "https://evil.example/tmf639-a2a-agent-v5.yaml",
+                "https://raw.githubusercontent.com/project-openan/registry-center/v1/other.yaml"):
+        with pytest.raises(stack.ValuesError, match="tmf639.specificationUrl"):
+            stack.validate_values("registryCenter", {"tmf639": {"specificationUrl": url}})
+    stack.validate_values("registryCenter", {"tmf639": {"specificationUrl": "https://mirror.corp/rc/tmf639-a2a-agent-v5.yaml"}},
+                          allowed_spec_prefixes=("https://mirror.corp/",))
+
+
+def test_catalog_url_and_http_callbacks_are_not_cr_settings():
+    with pytest.raises(stack.ValuesError, match="catalog.specificationUrl"):
+        stack.validate_values("registryCenter", {"catalog": {"enabled": True, "specificationUrl": "https://x/y.yaml"}})
+    stack.validate_values("registryCenter", {"catalog": {"enabled": True}})
+    with pytest.raises(stack.ValuesError, match="allowHttpCallbacks"):
+        stack.validate_values("registryCenter", {"broadcast": {"allowHttpCallbacks": True}})
+
+
+def test_callback_hosts_must_be_allowed_by_the_operator():
+    values = {"broadcast": {"enabled": True, "callbackAllowlist": "listener.example, Other.example"}}
+    with pytest.raises(stack.ValuesError, match="ALLOWED_CALLBACK_HOSTS"):
+        stack.validate_values("registryCenter", values)
+    with pytest.raises(stack.ValuesError, match=r"\['other.example'\]"):
+        stack.validate_values("registryCenter", values, allowed_callback_hosts=("listener.example",))
+    stack.validate_values("registryCenter", values, allowed_callback_hosts=("listener.example", "other.example"))

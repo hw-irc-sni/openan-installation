@@ -279,6 +279,14 @@ in the chart values, or under `registryCenter.values` in the OpenAN CR. They nee
 
 Set `registry.publicBaseUrl` to the gateway URL with the component prefix so resource and event `href`s resolve for clients.
 
+Through the OpenAN CR, the operator restricts these values:
+
+- **Profile URL:** an allowed prefix (`ALLOWED_SPEC_URL_PREFIXES`).
+- **Callback hosts:** only those listed in `ALLOWED_CALLBACK_HOSTS`.
+- **Not settable from a CR:** `broadcast.allowHttpCallbacks` and `catalog.specificationUrl`.
+
+See `operator/openan-operator/README.md`.
+
 **Helm repository.** The charts in `charts/` (`openan-operator`, `openan-registry-center`, `openan-orchestration-center`,
 `openan-frontend`) are also published as a Helm repository on GitHub Pages (`gh-pages` branch, by
 `.github/workflows/release-charts.yml`; see the repository `README.md`):

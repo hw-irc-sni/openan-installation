@@ -91,6 +91,15 @@ sequenceDiagram
   with the operator env `ALLOWED_IMAGE_PREFIXES`, comma separated, e.g. via `configmap.extra`). A violating CR is
   rejected before anything is installed. Using a Registry that is not the one the operator deploys is therefore
   not supported through this CR.
+- **TMFC012 values (`registryCenter.values`):**
+  - `tmf639.specificationUrl` must be a `tmf639-a2a-agent-v5.yaml` profile under an allowed prefix. The default
+    prefix is `https://raw.githubusercontent.com/project-openan/registry-center/`; set the operator env
+    `ALLOWED_SPEC_URL_PREFIXES` to override it.
+  - `broadcast.callbackAllowlist` hosts must be listed in the operator env `ALLOWED_CALLBACK_HOSTS`. It is empty
+    by default, so no hub or webhook destinations are allowed.
+  - `broadcast.allowHttpCallbacks` and `catalog.specificationUrl` cannot be set from a CR.
+  - `REGISTRY_TMF639_*` and `REGISTRY_BROADCAST_*` are generated keys, so a CR that set
+    `REGISTRY_BROADCAST_ENABLED` in `registry.extraEnv` must move it to `broadcast.enabled`.
 - Card sync uses the oldest `OpenAN` in the namespace that is Ready; the operator ships one namespaced Role per
   monitored namespace, so wildcard namespaces such as `odacompns-*` are watched but not managed.
 - Only `a2a` ExposedAPIs are synced; the Registry Center has no MCP concept.

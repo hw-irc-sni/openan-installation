@@ -52,8 +52,15 @@ def _keys(node):
                                  "component.id", "component.functionalBlock"])
 def test_tmf639_values_never_add_yaml_structure(key):
     payload = "x\n        hostNetwork: true\n        injected: yes"
-    r = template("openan-registry-center", "--set", "tmf639.enabled=true", "--set", "tmf639.specificationUrl=https://p/x.yaml",
+    r = template("openan-registry-center", "--set", "tmf639.enabled=true", "--set", "tmf639.specificationUrl=https://p/tmf639-a2a-agent-v5.yaml",
                  "--set", "catalog.enabled=true", "--set", "broadcast.enabled=true",
                  "--set", "broadcast.callbackAllowlist=l.example", "--set-string", f"{key}={payload}")
     out = r.stdout if r.returncode == 0 else ""
     assert "hostNetwork" not in [k for d in yaml.safe_load_all(out) if d for k in _keys(d)]
+
+
+def test_tmf639_quoting_baseline_renders():
+    """Guards the test above: with a valid profile URL the enabled chart must render at all."""
+    r = template("openan-registry-center", "--set", "tmf639.enabled=true",
+                 "--set", "tmf639.specificationUrl=https://p/tmf639-a2a-agent-v5.yaml")
+    assert r.returncode == 0, r.stderr

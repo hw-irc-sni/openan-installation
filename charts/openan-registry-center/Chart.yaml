@@ -7,5 +7,6 @@ version: 0.2.0
 # version: 0.1.1 - prepare-runtime runs as root (minimal caps) and chowns data/log to the pod user;
 #   persistence.prepareAsRoot=false keeps the non-root init
 # version: 0.2.0 - optional TMFC012 alignment: tmf639.* (TMF639 v5 exposed API and hub events),
-#   broadcast.* (change broadcast and callback allowlist), catalog.* (optional TMF634 DependentAPI)
+#   broadcast.* (change broadcast and callback allowlist), catalog.* (optional TMF634 DependentAPI).
+#   Breaking: REGISTRY_BROADCAST_* and REGISTRY_TMF639_ENABLED are generated, so registry.extraEnv can no longer set them.
 appVersion: "v1"

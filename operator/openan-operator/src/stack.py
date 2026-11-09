@@ -40,6 +40,10 @@ SECURITY_WORDS = ("AUTH", "TOKEN", "PASSWORD", "PASSWD", "SECRET", "CRED", "IDEN
                   "HTTPS", "VERIFY", "OWNER", "TRUST", "URL", "URI", "HOST", "ENDPOINT", "PROXY", "ALLOWLIST", "PERSISTENCE",
                   "DB_", "DATABASE", "CIPHER", "ADMIN", "ISOLATION")
 DEFAULT_IMAGE_PREFIXES = ("ghcr.io/project-openan/",)
+# The TMF639 specification URL is what the Canvas matches dependencies on: a CR may only declare a profile
+# published under these prefixes (ALLOWED_SPEC_URL_PREFIXES overrides them).
+DEFAULT_SPEC_URL_PREFIXES = ("https://raw.githubusercontent.com/project-openan/registry-center/",)
+TMF639_PROFILE_FILE = "/tmf639-a2a-agent-v5.yaml"
 
 
 class ValuesError(ValueError):
@@ -58,7 +62,32 @@ def _integer(comp: str, key: str, value: Any, lo: int, hi: int) -> None:
         raise ValuesError(f"{comp}: {key} must be an integer between {lo} and {hi}")
 
 
-def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_IMAGE_PREFIXES) -> None:
+def _validate_tmfc012(values: Dict[str, Any], spec_prefixes, callback_hosts) -> None:
+    """tmf639.*, catalog.* and broadcast.* decide which APIs the Canvas binds and where the Registry posts events."""
+    tmf639 = values.get("tmf639") or {}
+    url = tmf639.get("specificationUrl") if isinstance(tmf639, dict) else None
+    if url is not None and not (isinstance(url, str) and url.startswith(tuple(spec_prefixes))
+                                and url.endswith(TMF639_PROFILE_FILE)):
+        raise ValuesError(f"registryCenter: tmf639.specificationUrl must be a {TMF639_PROFILE_FILE.lstrip('/')} profile "
+                          f"under {list(spec_prefixes)}")
+    if "specificationUrl" in (values.get("catalog") or {}):
+        raise ValuesError("registryCenter: catalog.specificationUrl is controlled by the chart (canonical TMF634 v5)")
+    broadcast = values.get("broadcast") or {}
+    if not isinstance(broadcast, dict):
+        raise ValuesError("registryCenter: broadcast must be a map")
+    if broadcast.get("allowHttpCallbacks") not in (None, False):
+        raise ValuesError("registryCenter: broadcast.allowHttpCallbacks is controlled by the operator")
+    hosts = broadcast.get("callbackAllowlist")
+    if hosts is not None:
+        requested = {h.strip().lower() for h in str(hosts).split(",") if h.strip()}
+        outside = sorted(requested - {h.lower() for h in callback_hosts})
+        if outside:
+            raise ValuesError(f"registryCenter: broadcast.callbackAllowlist hosts {outside} are not in the operator's "
+                              "ALLOWED_CALLBACK_HOSTS")
+
+
+def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_IMAGE_PREFIXES, *,
+                    allowed_spec_prefixes=DEFAULT_SPEC_URL_PREFIXES, allowed_callback_hosts=()) -> None:
     repo = (values.get("image") or {}).get("repository")
     if repo and not any(repo.startswith(p) for p in allowed_prefixes):
         raise ValuesError(f"{comp}: image.repository {repo!r} is outside the allowed registries {list(allowed_prefixes)}")
@@ -84,6 +113,7 @@ def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_
         set_by_cr = sorted(k for k in ("authMode", "identityMode", "signatureValidation") if k in (values.get("registry") or {}))
         if set_by_cr:
             raise ValuesError(f"registryCenter: registry.{set_by_cr} are controlled by the operator (use spec.cardSync.signing)")
+        _validate_tmfc012(values, allowed_spec_prefixes, allowed_callback_hosts)
     if comp in EXTRA_ENV:
         section, key = EXTRA_ENV[comp]
         env = (values.get(section) or {}).get(key) or {}

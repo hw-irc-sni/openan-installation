@@ -279,7 +279,8 @@ def test_component_identity_overrides_still_win():
     ({"tmf639.enabled": "true"}, "tmf639.specificationUrl is required"),
     ({"tmf639.enabled": "true", "tmf639.specificationUrl":
       "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF639_Resource_Inventory/5.0.0/"
-      "swagger/TMF639-Resource_Inventory_Management-v5.0.0.oas.yaml"}, "must not be the canonical"),
+      "swagger/TMF639-Resource_Inventory_Management-v5.0.0.oas.yaml"}, "never the canonical"),
+    ({"tmf639.enabled": "true", "tmf639.specificationUrl": "http://example/tmf639-a2a-agent-v5.yaml"}, "https URL"),
     ({"broadcast.enabled": "true"}, "broadcast.callbackAllowlist is required"),
     ({"catalog.enabled": "true", "catalog.specificationUrl": ""}, "catalog.specificationUrl is required"),
 ])

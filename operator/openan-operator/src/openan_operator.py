@@ -92,9 +92,13 @@ def reconcile(spec, name, namespace, body, patch, logger, **_):
     conds, comps = [], {}
     prior_ready = True
     prefixes = tuple(p for p in os.environ.get("ALLOWED_IMAGE_PREFIXES", "").split(",") if p) or stack.DEFAULT_IMAGE_PREFIXES
+    spec_prefixes = (tuple(p for p in os.environ.get("ALLOWED_SPEC_URL_PREFIXES", "").split(",") if p)
+                     or stack.DEFAULT_SPEC_URL_PREFIXES)
+    callback_hosts = tuple(h.strip() for h in os.environ.get("ALLOWED_CALLBACK_HOSTS", "").split(",") if h.strip())
     try:  # reject the whole CR up front, before anything is installed
         for comp in stack.enabled_components(spec):
-            stack.validate_values(comp, spec.get(comp, {}).get("values", {}), prefixes)
+            stack.validate_values(comp, spec.get(comp, {}).get("values", {}), prefixes,
+                                  allowed_spec_prefixes=spec_prefixes, allowed_callback_hosts=callback_hosts)
     except stack.ValuesError as e:
         metrics.RECONCILES.labels("rejected").inc()
         raise kopf.PermanentError(str(e))
