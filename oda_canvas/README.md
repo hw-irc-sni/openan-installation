@@ -279,6 +279,30 @@ in the chart values, or under `registryCenter.values` in the OpenAN CR. They nee
 
 Set `registry.publicBaseUrl` to the gateway URL with the component prefix so resource and event `href`s resolve for clients.
 
+**Gateway path prefix.** The Canvas component gateway forwards `/<componentName>/...` to the service without rewriting it.
+The chart therefore sets `REGISTRY_PATH_PREFIX=/<componentName>`, and the Registry Center serves every route under that
+prefix as well as without it. Registry Center images from before `path.prefix` (including `v1.1.2`) ignore the variable,
+so their ExposedAPI URLs answer 404 through the gateway. The portal and the operator call the Service directly, so they
+are unaffected.
+
+**Demo variables** (`config.mk`; override on the `make` command line):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENAN_RC_BUILD`, `OPENAN_RC_SRC` | `false`, `../../registry-center` | Build the Registry Center image from source instead of pulling it. Use a non-release `OPENAN_RC_TAG`, for example `src`. `make openan-operator` then restarts the Deployment so the new build runs. |
+| `OPENAN_RC_PUBLIC_BASE_URL` | `https://$(INGRESS_ADDRESS)/openan-registry-center-registrycenter` | `registry.publicBaseUrl`, the base of TMF639 `href`s. |
+| `OPENAN_TMF639_ENABLED`, `OPENAN_TMF639_SPEC_URL` | `false`, empty | `tmf639.*` in the OpenAN CR. |
+| `OPENAN_ALLOWED_SPEC_URL_PREFIXES` | empty (operator default: `project-openan/registry-center` raw URLs) | Operator env `ALLOWED_SPEC_URL_PREFIXES`, for example to accept a fork's profile URL. |
+
+TMF639 from a `registry-center` checkout of `feat/tmf639-facade` (fork, before an upstream release):
+
+```bash
+make openan-operator-image openan-operator OPENAN_RC_BUILD=true OPENAN_RC_TAG=src \
+  OPENAN_TMF639_ENABLED=true \
+  OPENAN_TMF639_SPEC_URL=https://raw.githubusercontent.com/hw-irc-sni/registry-center/<commit>/docs/openapi/tmf639-a2a-agent-v5.yaml \
+  OPENAN_ALLOWED_SPEC_URL_PREFIXES=https://raw.githubusercontent.com/hw-irc-sni/registry-center/
+```
+
 Through the OpenAN CR, the operator restricts these values:
 
 - **Profile URL:** an allowed prefix (`ALLOWED_SPEC_URL_PREFIXES`).

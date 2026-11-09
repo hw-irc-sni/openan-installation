@@ -302,6 +302,7 @@ down:
 # ---- OpenAN operator -------------------------------------------------------------------------------
 # Not part of `make bootstrap-oda-canvas`: build/load images first (`make openan-operator-image`), then `make openan-operator`.
 OPENAN_ROOT := $(abspath ..)
+comma := ,
 OPENAN_OC_IMAGE := ghcr.io/project-openan/orchestration-center:$(OPENAN_OC_TAG)
 OPENAN_FE_IMAGE := ghcr.io/project-openan/openan-portal:$(OPENAN_FE_TAG)
 OPENAN_IMAGES := ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG) $(OPENAN_OC_IMAGE) $(OPENAN_FE_IMAGE)
@@ -312,7 +313,12 @@ openan-operator-image:
 	@# default buildx driver: the docker-container driver does not use the Docker daemon proxy
 	docker image inspect $(OPENAN_FE_IMAGE) >/dev/null 2>&1 || \
 	  (cd $(OPENAN_ROOT)/containerized/build/portal && BUILDER=default PUSH=0 PLATFORMS=linux/amd64 TAG=$(OPENAN_FE_TAG) bash build-portal-image.sh)
+ifeq ($(OPENAN_RC_BUILD),true)
+	@# Always rebuilt (layer cache keeps it cheap) so source changes are picked up; see openan-operator for the restart.
+	docker build -t ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG) $(OPENAN_RC_SRC)
+else
 	@docker image inspect ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG) >/dev/null 2>&1 || docker pull ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG)
+endif
 	@for i in $(OPENAN_OPERATOR_IMAGE):$(OPENAN_OPERATOR_TAG) $(OPENAN_IMAGES); do \
 	  kind load docker-image $$i --name $(CLUSTER_NAME); done
 
@@ -321,7 +327,9 @@ openan-operator:
 	kubectl apply -f $(OPENAN_ROOT)/operator/openan-operator/crd/openan-crd.yaml
 	helm upgrade --install openan-operator $(OPENAN_ROOT)/charts/openan-operator -n $(OPENAN_OPERATOR_NS) --create-namespace \
 	  --set deployment.image=$(OPENAN_OPERATOR_IMAGE) --set deployment.version=$(OPENAN_OPERATOR_TAG) \
-	  --set deployment.monitoredNamespaces='$(OPENAN_NS)' --wait --timeout 3m
+	  --set deployment.monitoredNamespaces='$(OPENAN_NS)' \
+	  $(if $(OPENAN_ALLOWED_SPEC_URL_PREFIXES),--set-string 'configmap.extra.ALLOWED_SPEC_URL_PREFIXES=$(subst $(comma),\$(comma),$(OPENAN_ALLOWED_SPEC_URL_PREFIXES))') \
+	  --wait --timeout 3m
 	@# `kind load` replaces the image under an unchanged tag: restart so the new build is the one running. `rollout status`
 	@# returns while the old pod is still terminating (it keeps reconciling for its 30 s grace period); two operators on
 	@# the same CR race on `helm upgrade --install`, and the one that is killed mid-upgrade leaves the release stuck in
@@ -334,6 +342,11 @@ openan-operator:
 	@envsubst < manifests/openan/openan-cr.yaml.tpl > .rendered/openan-cr.yaml
 	kubectl apply -f .rendered/openan-cr.yaml
 	kubectl -n $(OPENAN_NS) wait --for=condition=Ready openan/openan --timeout=10m
+ifeq ($(OPENAN_RC_BUILD),true)
+	@# A rebuilt image under an unchanged tag does not change the Deployment: restart it to run the new build.
+	kubectl -n $(OPENAN_NS) rollout restart deploy/openan-registry-center-registry-center
+	kubectl -n $(OPENAN_NS) rollout status deploy/openan-registry-center-registry-center --timeout=5m
+endif
 
 # Portal on the Istio gateway at "/". Istio orders the VirtualServices of host "*" by creation time, so this catch-all must
 # be the newest: delete and re-create it (a plain apply keeps the old timestamp) whenever a Component's route is added.

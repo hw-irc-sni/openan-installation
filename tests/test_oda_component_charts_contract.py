@@ -318,3 +318,12 @@ def test_tmf639_profile_is_served_by_the_spec_sidecar():
     spec_cm = next(d for d in docs if d["metadata"]["name"].endswith("-openapi"))
     profile = yaml.safe_load(spec_cm["data"]["tmf639-a2a-agent-v5.yaml"])
     assert profile["openapi"].startswith("3.") and {"/resource", "/resource/{id}", "/hub", "/hub/{id}"} <= set(profile["paths"])
+
+
+
+def test_service_also_answers_under_the_gateway_prefix():
+    """The Canvas gateway forwards /<componentName>/... unchanged: the service must serve that prefix too."""
+    spec, env = _rc(TMF639)
+    for api in spec["coreFunction"]["exposedAPIs"]:
+        assert api["path"].startswith(env["REGISTRY_PATH_PREFIX"] + "/")
+    assert env["REGISTRY_PATH_PREFIX"] == "/rel-registrycenter"

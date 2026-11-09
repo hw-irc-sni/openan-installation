@@ -18,6 +18,7 @@ data:
     "REGISTRY_REGISTRY_SIGN_ENABLED" "false"
     "REGISTRY_SIGNATURE_VALIDATION_ENABLED" (.Values.registry.signatureValidation | toString)
     "REGISTRY_TMF639_ENABLED" (include "rc.tmf639" .)
+    "REGISTRY_PATH_PREFIX" (printf "/%s" (include "rc.componentName" .))
     "REGISTRY_BROADCAST_ENABLED" (include "rc.broadcast" .)
     "REGISTRY_BROADCAST_CALLBACK_ALLOWLIST" (.Values.broadcast.callbackAllowlist | toString)
     "REGISTRY_BROADCAST_ALLOW_HTTP_CALLBACKS" (eq (toString .Values.broadcast.allowHttpCallbacks) "true" | toString)

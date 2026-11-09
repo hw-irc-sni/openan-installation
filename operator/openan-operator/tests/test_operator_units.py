@@ -555,3 +555,9 @@ def test_callback_hosts_must_be_allowed_by_the_operator():
     with pytest.raises(stack.ValuesError, match=r"\['other.example'\]"):
         stack.validate_values("registryCenter", values, allowed_callback_hosts=("listener.example",))
     stack.validate_values("registryCenter", values, allowed_callback_hosts=("listener.example", "other.example"))
+
+
+
+def test_empty_tmf639_profile_url_is_left_to_the_chart():
+    # The demo CR template always renders the key; an empty URL only fails in the chart when TMF639 is enabled.
+    stack.validate_values("registryCenter", {"tmf639": {"enabled": False, "specificationUrl": ""}})

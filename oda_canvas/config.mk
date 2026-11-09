@@ -80,6 +80,19 @@ OPENAN_OPERATOR_NS=canvas
 OPENAN_OPERATOR_IMAGE=openan/openan-operator
 OPENAN_OPERATOR_TAG=0.1.0
 OPENAN_RC_TAG=v1.1.2
+# OPENAN_RC_BUILD=true builds ghcr.io/project-openan/registry-center:$(OPENAN_RC_TAG) from OPENAN_RC_SRC instead of pulling it
+# (use a non-release tag, e.g. OPENAN_RC_TAG=src). Needed for TMF639 and the gateway path prefix until a release has them.
+OPENAN_RC_BUILD=false
+OPENAN_RC_SRC=../../registry-center
+# Base of resource/event hrefs: the Canvas gateway URL of the Registry Center Component (as in its ExposedAPI status).
+OPENAN_RC_PUBLIC_BASE_URL=https://$(INGRESS_ADDRESS)/openan-registry-center-registrycenter
+# TMFC012 alignment (oda_canvas/TMF639-FACADE-PLAN.md). OPENAN_TMF639_SPEC_URL is required when enabled: the
+# tmf639-a2a-agent-v5.yaml profile at a pinned commit or tag. The operator accepts only URLs under
+# https://raw.githubusercontent.com/project-openan/registry-center/ unless OPENAN_ALLOWED_SPEC_URL_PREFIXES
+# (comma separated) says otherwise, e.g. https://raw.githubusercontent.com/hw-irc-sni/registry-center/ for a fork.
+OPENAN_TMF639_ENABLED=false
+OPENAN_TMF639_SPEC_URL=
+OPENAN_ALLOWED_SPEC_URL_PREFIXES=
 # No published Orchestration Center image matches the current API: it is built from OPENAN_OC_SRC.
 OPENAN_OC_TAG=src
 OPENAN_OC_SRC=../../orchestration-center

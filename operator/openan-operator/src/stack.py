@@ -26,7 +26,7 @@ GENERATED_ENV = {
         "REGISTRY_IP", "REGISTRY_PORT", "REGISTRY_ENABLE_HTTPS", "REGISTRY_VERIFY_CLIENT", "REGISTRY_FORWARDED_ALLOW_IPS",
         "REGISTRY_STARTUP_STRICT_IDENTITY", "REGISTRY_OWNER_IDENTITY_MODE", "REGISTRY_INTEGRATION_AUTH_MODE",
         "REGISTRY_REGISTRY_PUBLIC_BASE_URL", "REGISTRY_REGISTRY_SIGN_ENABLED", "REGISTRY_SIGNATURE_VALIDATION_ENABLED",
-        "REGISTRY_TMF639_ENABLED", "REGISTRY_BROADCAST_ENABLED", "REGISTRY_BROADCAST_CALLBACK_ALLOWLIST",
+        "REGISTRY_TMF639_ENABLED", "REGISTRY_PATH_PREFIX", "REGISTRY_BROADCAST_ENABLED", "REGISTRY_BROADCAST_CALLBACK_ALLOWLIST",
         "REGISTRY_BROADCAST_ALLOW_HTTP_CALLBACKS", "PERSISTENCE_MODE", "LLM_CONFIG_FILE"}),
     "orchestrationCenter": frozenset({
         "ORCH_IP", "ORCH_PORT", "ORCH_ENABLE_HTTPS", "ORCH_VERIFY_CLIENT", "ORCH_FORWARDED_ALLOW_IPS",
@@ -66,7 +66,7 @@ def _validate_tmfc012(values: Dict[str, Any], spec_prefixes, callback_hosts) -> 
     """tmf639.*, catalog.* and broadcast.* decide which APIs the Canvas binds and where the Registry posts events."""
     tmf639 = values.get("tmf639") or {}
     url = tmf639.get("specificationUrl") if isinstance(tmf639, dict) else None
-    if url is not None and not (isinstance(url, str) and url.startswith(tuple(spec_prefixes))
+    if url not in (None, "") and not (isinstance(url, str) and url.startswith(tuple(spec_prefixes))
                                 and url.endswith(TMF639_PROFILE_FILE)):
         raise ValuesError(f"registryCenter: tmf639.specificationUrl must be a {TMF639_PROFILE_FILE.lstrip('/')} profile "
                           f"under {list(spec_prefixes)}")
