@@ -87,7 +87,7 @@ OPENAN_RC_SRC=../../registry-center
 # Base of resource/event hrefs: the Canvas gateway URL of the Registry Center Component (as in its ExposedAPI status).
 OPENAN_RC_PUBLIC_BASE_URL=https://$(INGRESS_ADDRESS)/openan-registry-center-registrycenter
 # TMFC012 alignment (oda_canvas/TMF639-FACADE-PLAN.md). OPENAN_TMF639_SPEC_URL is required when enabled: the
-# tmf639-a2a-agent-v5.yaml profile at a pinned commit or tag. The operator accepts only URLs under
+# tmf639-a2a-agent-v5.yaml profile at a commit, tag or branch (README.md has the fork recipe). The operator accepts only URLs under
 # https://raw.githubusercontent.com/project-openan/registry-center/ unless OPENAN_ALLOWED_SPEC_URL_PREFIXES
 # (comma separated) says otherwise, e.g. https://raw.githubusercontent.com/hw-irc-sni/registry-center/ for a fork.
 OPENAN_TMF639_ENABLED=false

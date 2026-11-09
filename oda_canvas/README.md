@@ -294,12 +294,13 @@ are unaffected.
 | `OPENAN_TMF639_ENABLED`, `OPENAN_TMF639_SPEC_URL` | `false`, empty | `tmf639.*` in the OpenAN CR. |
 | `OPENAN_ALLOWED_SPEC_URL_PREFIXES` | empty (operator default: `project-openan/registry-center` raw URLs) | Operator env `ALLOWED_SPEC_URL_PREFIXES`, for example to accept a fork's profile URL. |
 
-TMF639 from a `registry-center` checkout of `feat/tmf639-facade` (fork, before an upstream release):
+TMF639 from a `registry-center` checkout of the fork's `oda-integration` branch (before an upstream release). The profile
+URL follows the same branch, so it changes when the branch moves; use a commit or tag to pin it:
 
 ```bash
 make openan-operator-image openan-operator OPENAN_RC_BUILD=true OPENAN_RC_TAG=src \
   OPENAN_TMF639_ENABLED=true \
-  OPENAN_TMF639_SPEC_URL=https://raw.githubusercontent.com/hw-irc-sni/registry-center/<commit>/docs/openapi/tmf639-a2a-agent-v5.yaml \
+  OPENAN_TMF639_SPEC_URL=https://raw.githubusercontent.com/hw-irc-sni/registry-center/oda-integration/docs/openapi/tmf639-a2a-agent-v5.yaml \
   OPENAN_ALLOWED_SPEC_URL_PREFIXES=https://raw.githubusercontent.com/hw-irc-sni/registry-center/
 ```
 
