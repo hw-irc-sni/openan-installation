@@ -107,6 +107,11 @@ helm install openan-operator openan/openan-operator -n openan-operator --create-
 The enabled `openan-registry-center`, `openan-orchestration-center` and `openan-frontend` charts have no default image
 tag: set `image.tag` explicitly (see `docs/en/TRANSPORT_DEPLOYMENT.md` for the deployment contract).
 
+`openan-registry-center` 0.2.0 can optionally declare the Registry Center as a TMFC012 Resource Inventory (TMF639 v5,
+`tmf639.*`, `broadcast.*`, `catalog.*`), and always sets `REGISTRY_PATH_PREFIX=/<componentName>` so the Registry Center
+answers the ODA Canvas gateway. Both need a `registry-center` image with those features; see
+[`oda_canvas/README.md`](oda_canvas/README.md) and [`oda_canvas/TMF639-FACADE-PLAN.md`](oda_canvas/TMF639-FACADE-PLAN.md).
+
 Maintainers:
 
 - The workflow runs on pushes to `main` that touch `charts/**` (or manually) and releases a chart only when its

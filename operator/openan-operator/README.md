@@ -98,8 +98,9 @@ sequenceDiagram
   - `broadcast.callbackAllowlist` hosts must be listed in the operator env `ALLOWED_CALLBACK_HOSTS`. It is empty
     by default, so no hub or webhook destinations are allowed.
   - `broadcast.allowHttpCallbacks` and `catalog.specificationUrl` cannot be set from a CR.
-  - `REGISTRY_TMF639_*` and `REGISTRY_BROADCAST_*` are generated keys, so a CR that set
-    `REGISTRY_BROADCAST_ENABLED` in `registry.extraEnv` must move it to `broadcast.enabled`.
+  - `REGISTRY_TMF639_*`, `REGISTRY_BROADCAST_*` and `REGISTRY_PATH_PREFIX` (always `/<componentName>`, the Canvas
+    gateway prefix) are generated keys, so a CR that set `REGISTRY_BROADCAST_ENABLED` in `registry.extraEnv` must
+    move it to `broadcast.enabled`.
 - Card sync uses the oldest `OpenAN` in the namespace that is Ready; the operator ships one namespaced Role per
   monitored namespace, so wildcard namespaces such as `odacompns-*` are watched but not managed.
 - Only `a2a` ExposedAPIs are synced; the Registry Center has no MCP concept.
