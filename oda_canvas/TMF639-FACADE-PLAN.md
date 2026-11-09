@@ -2,7 +2,8 @@
 
 Status (2026-11-09):
 
-- §1–§4 (facade, hub and events) are implemented in `registry-center` on branch `feat/tmf639-facade` of the fork `hw-irc-sni/registry-center`: commits 8dfab74 and 48f8892, not yet merged upstream.
+- §1–§4 (facade, hub and events) are implemented in `registry-center` on branch `feat/tmf639-facade` of the fork `hw-irc-sni/registry-center`, merged into the fork's `oda-integration` (e60f0f9). Not yet proposed upstream.
+- Deployed in the kind demo and verified end to end through the Canvas gateway, including the hub (§4.1).
 - §5 (chart) is implemented in this repo.
 - §8 (catalog) is still a proposal.
 
@@ -131,6 +132,38 @@ heartbeat, health history/stream, keys, knowledge graph.
   - Order is not guaranteed across retries.
   - Over the rate limit, events stay pending instead of degrading to `SYNC_REQUIRED`.
   - The API Reference in `registry-center` is the contract.
+
+### 4.1 Demo verification (2026-11-09)
+
+Kind demo, Registry Center built from `oda-integration` (`OPENAN_RC_BUILD=true OPENAN_RC_TAG=src`), with
+`OPENAN_TMF639_ENABLED=true`, the profile URL on the fork's `oda-integration` branch, and
+`OPENAN_BROADCAST_ENABLED=true OPENAN_BROADCAST_CALLBACK_HOSTS=hub-listener.components.svc`.
+
+- **Setup.** A throwaway HTTPS listener (`hub-listener` in `components`) logged every callback. Its certificate came from a
+  temporary CA, which the Registry Center was made to trust by patching its Deployment out of band (`SSL_CERT_FILE` plus a
+  mounted CA ConfigMap). The listener and the patch were removed afterwards, and broadcast was turned off again.
+- **Component.** `Complete` as TMFC012. With broadcast on, `eventNotification.publishedEvents` lists `resourceinventory`
+  with the profile URL; with broadcast off, the list is empty.
+- **Hub API through the gateway** (`https://127.0.0.1/openan-registry-center-registrycenter/tmf-api/resourceInventoryManagement/v5`),
+  using the operator's token (`vendor_agent` role, not admin): `POST /hub` returned 201 with `Location`, `GET /hub/{id}`
+  returned 200, and `DELETE /hub/{id}` returned 204. Without a token, `POST /hub` returned a TMF630 401.
+- **Events.** The hub `query` was `eventType=` with all four events.
+
+  | Trigger | Callback received | Latency |
+  |---|---|---|
+  | `DELETE /resource/{id}` of `Sample-A2A-T-Agent` | `ResourceDeleteEvent` | about 0.3 s |
+  | Operator restart, so card sync registers the agent again | `ResourceCreateEvent` | delivered with the registration |
+
+  - Both callbacks went to the `callback` path as given (`/tmf639/listener`), one event per POST.
+  - Each callback carried the envelope (`@type`, `@baseType: Event`, `eventId`, `eventTime`, `eventType`, `title`,
+    `domain: ResourceInventory`).
+  - The Create event carried the full `LogicalResource` (`administrativeState: unlocked`, `lifecycleState`, the
+    characteristics, `resourceSpecification`, `relatedParty`). The Delete event carried the reference only.
+  - `href` used `registry.publicBaseUrl`, so it pointed at the gateway URL.
+  - The hub had no `secret`, so the callbacks carried no `X-Registry-Signature`, as documented.
+- **Not exercised:** `ResourceAttributeValueChangeEvent` and `ResourceStateChangeEvent`, signed callbacks, and
+  retry and degraded delivery. The unit tests in `registry-center` (`tests/test_tmf639_events.py`,
+  `tests/test_tmf639_api.py`) cover them.
 
 ## 5. Chart changes (this repo, after the facade ships)
 
@@ -363,6 +396,11 @@ catalog:
   `oda-canvas` issues. If fixed upstream, the TMF634 DependentAPI could be declared
   unconditionally.
 
+- **Callback TLS trust.** The Registry Center verifies callback certificates against its default CA bundle, and
+  neither the chart nor the OpenAN CR can add a CA. A CR also cannot enable plain-HTTP callbacks. So in-cluster
+  listeners need a certificate from a public CA. Otherwise they need an operator-approved way to supply a CA bundle,
+  which does not exist yet. The §4.1 test used an out-of-band Deployment patch.
+
 ## 10. Suggested sequence
 
 1. Implement the TMF639 router (§1–§3) plus unit tests in `registry-center`, behind
@@ -375,6 +413,6 @@ catalog:
    tests and the CI pin.
 5. Deploy in the kind demo (`make bootstrap-openan`). Verify gateway routing, check that no
    other component's TMF639 dependency resolves to RC, and check that the Component reaches
-   `Complete`.
+   `Complete`. Done 2026-11-09, including an end-to-end hub test (§4.1).
 6. Catalog phase (§8): the `agent_registry/catalog/` module, `catalog.*` values,
    `make resource-catalog`, and the acceptance checks in §8.4.
