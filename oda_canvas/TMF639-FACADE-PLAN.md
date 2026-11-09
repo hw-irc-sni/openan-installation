@@ -396,10 +396,12 @@ catalog:
   `oda-canvas` issues. If fixed upstream, the TMF634 DependentAPI could be declared
   unconditionally.
 
-- **Callback TLS trust.** The Registry Center verifies callback certificates against its default CA bundle, and
-  neither the chart nor the OpenAN CR can add a CA. A CR also cannot enable plain-HTTP callbacks. So in-cluster
-  listeners need a certificate from a public CA. Otherwise they need an operator-approved way to supply a CA bundle,
-  which does not exist yet. The §4.1 test used an out-of-band Deployment patch.
+- **Callback TLS trust (resolved).** The Registry Center verifies callback certificates against its default CA
+  bundle, and a CR cannot enable plain-HTTP callbacks, so in-cluster listeners with private certificates were
+  unreachable (the §4.1 test used an out-of-band Deployment patch). Resolved by `broadcast.callback.ca.file` in
+  `registry-center` (extra CAs, added to the defaults, for callbacks only) and the chart values
+  `broadcast.callbackCaConfigMap`/`callbackCaKey`. Through the operator, the ConfigMap must be listed in
+  `ALLOWED_CALLBACK_CA_CONFIGMAPS`.
 
 ## 10. Suggested sequence
 

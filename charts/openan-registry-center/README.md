@@ -36,6 +36,14 @@ chart therefore always sets `REGISTRY_PATH_PREFIX=/<componentName>`, and the Reg
 route both with and without that prefix. Images without `path.prefix` (including `v1.1.2`) ignore it, so their
 ExposedAPI URLs answer 404 through the gateway. In-cluster clients that call the Service directly are unaffected.
 
+**Callback CA bundle.** Callback certificates are verified against the image's default CAs. For listeners with private
+certificates (for example in-cluster), set `broadcast.callbackCaConfigMap` to a ConfigMap in the release namespace whose
+key `broadcast.callbackCaKey` holds the CA bundle (PEM). The chart mounts it and sets
+`REGISTRY_BROADCAST_CALLBACK_CA_FILE`; the Registry Center (`broadcast.callback.ca.file`) trusts it in addition to the
+default CAs, for callback deliveries only. Verification is never disabled. A missing ConfigMap keeps the pod from
+starting, and an unloadable bundle stops the Registry Center at startup. The bundle is read at startup, so restart the pod
+after changing it. Images without `broadcast.callback.ca.file` ignore it.
+
 ## Values
 
 | Value | Default | Purpose |
@@ -51,6 +59,7 @@ ExposedAPI URLs answer 404 through the gateway. In-cluster clients that call the
 | `persistence.*`, `podSecurityContext`, `resources` | see `values.yaml` | Storage and pod user (source builds run as 10001) |
 | `tmf639.enabled`, `tmf639.specificationUrl` | `false`, empty | TMFC012 alignment, below |
 | `broadcast.enabled`, `broadcast.callbackAllowlist`, `broadcast.allowHttpCallbacks` | `false`, empty, `false` | Change broadcast for native webhooks and the TMF639 `/hub`; the allowlist is required when enabled |
+| `broadcast.callbackCaConfigMap`, `broadcast.callbackCaKey` | empty, `ca.crt` | ConfigMap and key of a PEM bundle of extra CAs for callback TLS, below |
 | `catalog.enabled`, `catalog.specificationUrl` | `false`, canonical TMF634 v5 URL | Optional TMF634 DependentAPI, below |
 
 ## TMFC012 Resource Inventory (optional)
@@ -104,6 +113,8 @@ The operator restricts what a CR may set:
   prefix is `https://raw.githubusercontent.com/project-openan/registry-center/`.
 - **Callback hosts:** every host in `broadcast.callbackAllowlist` must be in `ALLOWED_CALLBACK_HOSTS`, which is empty
   by default.
+- **Callback CA:** `broadcast.callbackCaConfigMap` must be in `ALLOWED_CALLBACK_CA_CONFIGMAPS`, which is empty by
+  default.
 - **Not settable from a CR:** `broadcast.allowHttpCallbacks` and `catalog.specificationUrl`.
 
 See `operator/openan-operator/README.md`. The kind demo (`oda_canvas/`) exposes these settings as `make` variables.

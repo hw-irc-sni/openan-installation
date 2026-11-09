@@ -11,4 +11,6 @@ version: 0.2.0
 #   Breaking: REGISTRY_BROADCAST_* and REGISTRY_TMF639_ENABLED are generated, so registry.extraEnv can no longer set them.
 #   REGISTRY_PATH_PREFIX=/<componentName>: the Canvas gateway forwards /<componentName>/... unchanged (needs a
 #   registry-center image with path.prefix; older images ignore it and stay unreachable through the gateway).
+#   broadcast.callbackCaConfigMap/callbackCaKey: extra CAs for callback TLS (REGISTRY_BROADCAST_CALLBACK_CA_FILE;
+#   needs an image with broadcast.callback.ca.file, older images ignore it).
 appVersion: "v1"

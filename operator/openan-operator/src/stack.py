@@ -27,7 +27,7 @@ GENERATED_ENV = {
         "REGISTRY_STARTUP_STRICT_IDENTITY", "REGISTRY_OWNER_IDENTITY_MODE", "REGISTRY_INTEGRATION_AUTH_MODE",
         "REGISTRY_REGISTRY_PUBLIC_BASE_URL", "REGISTRY_REGISTRY_SIGN_ENABLED", "REGISTRY_SIGNATURE_VALIDATION_ENABLED",
         "REGISTRY_TMF639_ENABLED", "REGISTRY_PATH_PREFIX", "REGISTRY_BROADCAST_ENABLED", "REGISTRY_BROADCAST_CALLBACK_ALLOWLIST",
-        "REGISTRY_BROADCAST_ALLOW_HTTP_CALLBACKS", "PERSISTENCE_MODE", "LLM_CONFIG_FILE"}),
+        "REGISTRY_BROADCAST_ALLOW_HTTP_CALLBACKS", "REGISTRY_BROADCAST_CALLBACK_CA_FILE", "PERSISTENCE_MODE", "LLM_CONFIG_FILE"}),
     "orchestrationCenter": frozenset({
         "ORCH_IP", "ORCH_PORT", "ORCH_ENABLE_HTTPS", "ORCH_VERIFY_CLIENT", "ORCH_FORWARDED_ALLOW_IPS",
         "ORCH_EXTERNAL_AUTH_MODE", "ORCH_PUBLIC_SCHEME", "AGENT_REGISTRY_URL", "PERSISTENCE_MODE", "LLM_CONFIG_FILE"}),
@@ -62,7 +62,7 @@ def _integer(comp: str, key: str, value: Any, lo: int, hi: int) -> None:
         raise ValuesError(f"{comp}: {key} must be an integer between {lo} and {hi}")
 
 
-def _validate_tmfc012(values: Dict[str, Any], spec_prefixes, callback_hosts) -> None:
+def _validate_tmfc012(values: Dict[str, Any], spec_prefixes, callback_hosts, callback_ca_configmaps=()) -> None:
     """tmf639.*, catalog.* and broadcast.* decide which APIs the Canvas binds and where the Registry posts events."""
     tmf639 = values.get("tmf639") or {}
     url = tmf639.get("specificationUrl") if isinstance(tmf639, dict) else None
@@ -84,10 +84,16 @@ def _validate_tmfc012(values: Dict[str, Any], spec_prefixes, callback_hosts) -> 
         if outside:
             raise ValuesError(f"registryCenter: broadcast.callbackAllowlist hosts {outside} are not in the operator's "
                               "ALLOWED_CALLBACK_HOSTS")
+    # An extra CA widens whom callback TLS trusts, like allowHttpCallbacks: only operator-approved ConfigMaps.
+    ca = broadcast.get("callbackCaConfigMap")
+    if ca not in (None, "") and ca not in callback_ca_configmaps:
+        raise ValuesError(f"registryCenter: broadcast.callbackCaConfigMap {ca!r} is not in the operator's "
+                          "ALLOWED_CALLBACK_CA_CONFIGMAPS")
 
 
 def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_IMAGE_PREFIXES, *,
-                    allowed_spec_prefixes=DEFAULT_SPEC_URL_PREFIXES, allowed_callback_hosts=()) -> None:
+                    allowed_spec_prefixes=DEFAULT_SPEC_URL_PREFIXES, allowed_callback_hosts=(),
+                    allowed_callback_ca_configmaps=()) -> None:
     repo = (values.get("image") or {}).get("repository")
     if repo and not any(repo.startswith(p) for p in allowed_prefixes):
         raise ValuesError(f"{comp}: image.repository {repo!r} is outside the allowed registries {list(allowed_prefixes)}")
@@ -113,7 +119,7 @@ def validate_values(comp: str, values: Dict[str, Any], allowed_prefixes=DEFAULT_
         set_by_cr = sorted(k for k in ("authMode", "identityMode", "signatureValidation") if k in (values.get("registry") or {}))
         if set_by_cr:
             raise ValuesError(f"registryCenter: registry.{set_by_cr} are controlled by the operator (use spec.cardSync.signing)")
-        _validate_tmfc012(values, allowed_spec_prefixes, allowed_callback_hosts)
+        _validate_tmfc012(values, allowed_spec_prefixes, allowed_callback_hosts, allowed_callback_ca_configmaps)
     if comp in EXTRA_ENV:
         section, key = EXTRA_ENV[comp]
         env = (values.get(section) or {}).get(key) or {}

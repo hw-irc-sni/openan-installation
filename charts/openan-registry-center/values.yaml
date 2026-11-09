@@ -49,6 +49,11 @@ broadcast:
   enabled: false
   callbackAllowlist: ""   # comma-separated callback hosts; required when enabled
   allowHttpCallbacks: false   # plain-HTTP callbacks (in-cluster listeners without TLS)
+  # ConfigMap (same namespace) with a PEM bundle of extra CAs for callback TLS, e.g. for in-cluster
+  # listeners with private certificates. Added to the default CAs; verification is never disabled.
+  # Read at startup: restart the pod after changing it. Needs an image with broadcast.callback.ca.file.
+  callbackCaConfigMap: ""
+  callbackCaKey: ca.crt         # key of the bundle in that ConfigMap
 
 # Optional TMF634 Resource Catalog dependency (TMFC012 declares it required). It only declares the
 # DependentAPI: the Registry Center does not check cards against a catalog yet. The Canvas ignores

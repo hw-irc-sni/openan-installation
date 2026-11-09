@@ -49,6 +49,7 @@ def _keys(node):
 
 
 @pytest.mark.parametrize("key", ["tmf639.specificationUrl", "catalog.specificationUrl", "broadcast.callbackAllowlist",
+                                 "broadcast.callbackCaConfigMap", "broadcast.callbackCaKey",
                                  "component.id", "component.functionalBlock"])
 def test_tmf639_values_never_add_yaml_structure(key):
     payload = "x\n        hostNetwork: true\n        injected: yes"
@@ -63,4 +64,11 @@ def test_tmf639_quoting_baseline_renders():
     """Guards the test above: with a valid profile URL the enabled chart must render at all."""
     r = template("openan-registry-center", "--set", "tmf639.enabled=true",
                  "--set", "tmf639.specificationUrl=https://p/tmf639-a2a-agent-v5.yaml")
+    assert r.returncode == 0, r.stderr
+
+
+def test_callback_ca_quoting_baseline_renders():
+    """Guards the callback CA cases above: valid values must render (the injected ones fail validation)."""
+    r = template("openan-registry-center", "--set", "broadcast.enabled=true", "--set", "broadcast.callbackAllowlist=l.example",
+                 "--set", "broadcast.callbackCaConfigMap=listener-ca", "--set", "broadcast.callbackCaKey=ca.crt")
     assert r.returncode == 0, r.stderr

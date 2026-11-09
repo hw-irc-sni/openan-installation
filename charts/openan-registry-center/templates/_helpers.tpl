@@ -5,6 +5,7 @@
 {{- define "rc.functionalBlock" -}}{{ .Values.component.functionalBlock | default (ternary "Production" "AIAgentRegistry" (eq (toString .Values.tmf639.enabled) "true")) }}{{- end -}}
 {{- define "rc.tmf639" -}}{{ eq (toString .Values.tmf639.enabled) "true" }}{{- end -}}
 {{- define "rc.broadcast" -}}{{ eq (toString .Values.broadcast.enabled) "true" }}{{- end -}}
+{{- define "rc.callbackCaFile" -}}{{ if .Values.broadcast.callbackCaConfigMap }}/opt/registry-center/etc/callback-ca/ca.pem{{ end }}{{- end -}}
 {{- define "rc.catalog" -}}{{ eq (toString .Values.catalog.enabled) "true" }}{{- end -}}
 {{- define "rc.gatewayConfiguration" -}}
 apiKeyVerification: {{ .Values.component.apipolicy.apiKeyVerification | toYaml | nindent 2 }}

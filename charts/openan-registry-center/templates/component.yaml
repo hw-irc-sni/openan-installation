@@ -12,6 +12,11 @@
 {{- if not (and (hasPrefix "https://" .Values.tmf639.specificationUrl) (hasSuffix "/tmf639-a2a-agent-v5.yaml" .Values.tmf639.specificationUrl)) }}{{ fail "tmf639.specificationUrl must be an https URL of the Registry Center profile tmf639-a2a-agent-v5.yaml (never the canonical TMF639 OAS)" }}{{- end }}
 {{- end }}
 {{- if and $broadcast (not .Values.broadcast.callbackAllowlist) }}{{ fail "broadcast.callbackAllowlist is required when broadcast.enabled" }}{{- end }}
+{{- with .Values.broadcast.callbackCaConfigMap }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" (toString .)) }}{{ fail "broadcast.callbackCaConfigMap must be a ConfigMap name (DNS-1123 subdomain)" }}{{- end }}
+{{- if gt (len (toString .)) 253 }}{{ fail "broadcast.callbackCaConfigMap must be at most 253 characters" }}{{- end }}
+{{- if not (regexMatch "^[-._a-zA-Z0-9]+$" (toString $.Values.broadcast.callbackCaKey)) }}{{ fail "broadcast.callbackCaKey must be a ConfigMap key ([-._a-zA-Z0-9]+)" }}{{- end }}
+{{- end }}
 {{- if and $catalog (not .Values.catalog.specificationUrl) }}{{ fail "catalog.specificationUrl is required when catalog.enabled" }}{{- end }}
 apiVersion: oda.tmforum.org/v1
 kind: Component

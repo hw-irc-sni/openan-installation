@@ -22,6 +22,7 @@ data:
     "REGISTRY_BROADCAST_ENABLED" (include "rc.broadcast" .)
     "REGISTRY_BROADCAST_CALLBACK_ALLOWLIST" (.Values.broadcast.callbackAllowlist | toString)
     "REGISTRY_BROADCAST_ALLOW_HTTP_CALLBACKS" (eq (toString .Values.broadcast.allowHttpCallbacks) "true" | toString)
+    "REGISTRY_BROADCAST_CALLBACK_CA_FILE" (include "rc.callbackCaFile" .)
     "PERSISTENCE_MODE" "file"
     "LLM_CONFIG_FILE" "/opt/registry-center/etc/config/models.yaml" }}
   {{- /* Generated keys are merged last: an extraEnv entry can never override them. */}}

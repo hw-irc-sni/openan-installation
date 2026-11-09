@@ -97,6 +97,8 @@ sequenceDiagram
     `ALLOWED_SPEC_URL_PREFIXES` to override it.
   - `broadcast.callbackAllowlist` hosts must be listed in the operator env `ALLOWED_CALLBACK_HOSTS`. It is empty
     by default, so no hub or webhook destinations are allowed.
+  - `broadcast.callbackCaConfigMap` (extra CAs for callback TLS) must be listed in the operator env
+    `ALLOWED_CALLBACK_CA_CONFIGMAPS`, which is empty by default: an extra CA widens whom callbacks trust.
   - `broadcast.allowHttpCallbacks` and `catalog.specificationUrl` cannot be set from a CR.
   - `REGISTRY_TMF639_*`, `REGISTRY_BROADCAST_*` and `REGISTRY_PATH_PREFIX` (always `/<componentName>`, the Canvas
     gateway prefix) are generated keys, so a CR that set `REGISTRY_BROADCAST_ENABLED` in `registry.extraEnv` must

@@ -82,6 +82,10 @@ spec:
         # Whole-directory mount (no subPath) so ConfigMap updates reach the pod without a restart.
         - {name: trust, mountPath: "/opt/registry-center/etc/sign_verify/jwks/{{ required "trust.organization is required" .Values.trust.organization }}", readOnly: true}
         {{- end }}
+        {{- if .Values.broadcast.callbackCaConfigMap }}
+        # Extra CAs for callback TLS (REGISTRY_BROADCAST_CALLBACK_CA_FILE), read at startup.
+        - {name: callback-ca, mountPath: /opt/registry-center/etc/callback-ca, readOnly: true}
+        {{- end }}
       - name: spec
         # Serves the hand-authored OpenAPI document; reuses the service image (python is always present).
         image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
@@ -105,4 +109,11 @@ spec:
       {{- if .Values.trust.configMap }}
       - name: trust
         configMap: {name: {{ .Values.trust.configMap }}, optional: true}
+      {{- end }}
+      {{- if .Values.broadcast.callbackCaConfigMap }}
+      - name: callback-ca
+        # Not optional: a missing bundle keeps the pod from starting instead of weakening callback TLS.
+        configMap:
+          name: {{ .Values.broadcast.callbackCaConfigMap | quote }}
+          items: [{key: {{ .Values.broadcast.callbackCaKey | quote }}, path: ca.pem}]
       {{- end }}

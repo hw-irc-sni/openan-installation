@@ -283,6 +283,8 @@ def test_component_identity_overrides_still_win():
     ({"tmf639.enabled": "true", "tmf639.specificationUrl": "http://example/tmf639-a2a-agent-v5.yaml"}, "https URL"),
     ({"broadcast.enabled": "true"}, "broadcast.callbackAllowlist is required"),
     ({"catalog.enabled": "true", "catalog.specificationUrl": ""}, "catalog.specificationUrl is required"),
+    ({"broadcast.callbackCaConfigMap": "Bad_Name"}, "broadcast.callbackCaConfigMap must be a ConfigMap name"),
+    ({"broadcast.callbackCaConfigMap": "ca", "broadcast.callbackCaKey": "a/b"}, "broadcast.callbackCaKey must be"),
 ])
 def test_tmf639_misconfiguration_fails_the_render(settings, message):
     assert message in render("openan-registry-center", settings, success=False)
@@ -327,3 +329,35 @@ def test_service_also_answers_under_the_gateway_prefix():
     for api in spec["coreFunction"]["exposedAPIs"]:
         assert api["path"].startswith(env["REGISTRY_PATH_PREFIX"] + "/")
     assert env["REGISTRY_PATH_PREFIX"] == "/rel-registrycenter"
+
+
+def _rc_pod(settings=None):
+    docs = render("openan-registry-center", settings)
+    pod = next(d for d in docs if d["kind"] == "Deployment")["spec"]["template"]["spec"]
+    rc = next(c for c in pod["containers"] if c["name"] == "registry-center")
+    return pod, rc
+
+
+def test_no_callback_ca_by_default():
+    pod, rc = _rc_pod(BROADCAST)
+    _, env = _rc(BROADCAST)
+    assert env["REGISTRY_BROADCAST_CALLBACK_CA_FILE"] == ""
+    assert "callback-ca" not in [v["name"] for v in pod["volumes"]]
+    assert "callback-ca" not in [m["name"] for m in rc["volumeMounts"]]
+
+
+def test_callback_ca_configmap_is_mounted_for_callback_tls():
+    settings = {**BROADCAST, "broadcast.callbackCaConfigMap": "listener-ca", "broadcast.callbackCaKey": "bundle.pem"}
+    pod, rc = _rc_pod(settings)
+    _, env = _rc(settings)
+    assert env["REGISTRY_BROADCAST_CALLBACK_CA_FILE"] == "/opt/registry-center/etc/callback-ca/ca.pem"
+    (volume,) = [v for v in pod["volumes"] if v["name"] == "callback-ca"]
+    # Not optional: a missing ConfigMap keeps the pod from starting instead of weakening callback TLS.
+    assert volume["configMap"] == {"name": "listener-ca", "items": [{"key": "bundle.pem", "path": "ca.pem"}]}
+    (mount,) = [m for m in rc["volumeMounts"] if m["name"] == "callback-ca"]
+    assert mount == {"name": "callback-ca", "mountPath": "/opt/registry-center/etc/callback-ca", "readOnly": True}
+
+
+def test_callback_ca_file_cannot_be_overridden_by_extra_env():
+    _, env = _rc({**BROADCAST, "registry.extraEnv.REGISTRY_BROADCAST_CALLBACK_CA_FILE": "/etc/ssl/evil.pem"})
+    assert env["REGISTRY_BROADCAST_CALLBACK_CA_FILE"] == ""

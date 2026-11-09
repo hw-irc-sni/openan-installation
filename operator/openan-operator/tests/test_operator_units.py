@@ -557,6 +557,16 @@ def test_callback_hosts_must_be_allowed_by_the_operator():
     stack.validate_values("registryCenter", values, allowed_callback_hosts=("listener.example", "other.example"))
 
 
+def test_callback_ca_configmap_must_be_allowed_by_the_operator():
+    values = {"broadcast": {"enabled": True, "callbackCaConfigMap": "listener-ca"}}
+    with pytest.raises(stack.ValuesError, match="ALLOWED_CALLBACK_CA_CONFIGMAPS"):
+        stack.validate_values("registryCenter", values)
+    with pytest.raises(stack.ValuesError, match="'listener-ca'"):
+        stack.validate_values("registryCenter", values, allowed_callback_ca_configmaps=("other-ca",))
+    stack.validate_values("registryCenter", values, allowed_callback_ca_configmaps=("other-ca", "listener-ca"))
+    stack.validate_values("registryCenter", {"broadcast": {"callbackCaConfigMap": ""}})
+
+
 
 def test_empty_tmf639_profile_url_is_left_to_the_chart():
     # The demo CR template always renders the key; an empty URL only fails in the chart when TMF639 is enabled.

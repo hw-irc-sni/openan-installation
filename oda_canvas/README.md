@@ -275,6 +275,7 @@ in the chart values, or under `registryCenter.values` in the OpenAN CR. They nee
 | `tmf639.enabled` | Exposes `TMF639` (`/<component>/tmf-api/resourceInventoryManagement/v5`, `required: true`); the native API becomes `required: false`; `componentMetadata` becomes `TMFC012` / `Production` unless `component.id` / `component.functionalBlock` are set. |
 | `tmf639.specificationUrl` | Required with `tmf639.enabled`: the release-independent profile `registry-center/docs/openapi/tmf639-a2a-agent-v5.yaml` at a pinned tag or commit. The canonical TMF OAS URL is refused, because the Canvas matches dependencies by exact URL and would route every TMF639 consumer here. |
 | `broadcast.enabled`, `broadcast.callbackAllowlist`, `broadcast.allowHttpCallbacks` | Change broadcast for the TMF639 `/hub` (and native webhooks); the allowlist is required. With `tmf639.enabled` the four TMF639 events are declared under `publishedEvents` (delivered as TMF630 callbacks, not a Canvas topic). |
+| `broadcast.callbackCaConfigMap`, `broadcast.callbackCaKey` | Extra CAs (PEM, from a ConfigMap) trusted for callback TLS, for listeners with private certificates. Through the operator the ConfigMap must be in `ALLOWED_CALLBACK_CA_CONFIGMAPS`. |
 | `catalog.enabled`, `catalog.specificationUrl` | Declares the optional `TMF634` DependentAPI. Only the declaration: the Registry Center does not check cards against a catalog yet (plan §8). The Canvas ignores `required: false`, so the Component stays `InProgress` until a catalog with exactly that URL exists. |
 
 Set `registry.publicBaseUrl` to the gateway URL with the component prefix so resource and event `href`s resolve for clients.
@@ -312,6 +313,7 @@ Through the OpenAN CR, the operator restricts these values:
 
 - **Profile URL:** an allowed prefix (`ALLOWED_SPEC_URL_PREFIXES`).
 - **Callback hosts:** only those listed in `ALLOWED_CALLBACK_HOSTS`.
+- **Callback CA:** `broadcast.callbackCaConfigMap` only if listed in `ALLOWED_CALLBACK_CA_CONFIGMAPS`.
 - **Not settable from a CR:** `broadcast.allowHttpCallbacks` and `catalog.specificationUrl`.
 
 See `operator/openan-operator/README.md`.
