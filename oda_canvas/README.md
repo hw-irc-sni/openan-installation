@@ -295,6 +295,7 @@ are unaffected.
 | `OPENAN_TMF639_ENABLED`, `OPENAN_TMF639_SPEC_URL` | `false`, empty | `tmf639.*` in the OpenAN CR. |
 | `OPENAN_ALLOWED_SPEC_URL_PREFIXES` | empty (operator default: `project-openan/registry-center` raw URLs) | Operator env `ALLOWED_SPEC_URL_PREFIXES`, for example to accept a fork's profile URL. |
 | `OPENAN_BROADCAST_ENABLED`, `OPENAN_BROADCAST_CALLBACK_HOSTS` | `false`, empty | `broadcast.*` in the OpenAN CR: native webhooks and, with TMF639, the `/hub` and its published events. The hosts (comma separated, required when enabled) are also passed to the operator as `ALLOWED_CALLBACK_HOSTS`. Callbacks must use `https`. |
+| `OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP`, `OPENAN_BROADCAST_CALLBACK_CA_KEY` | empty, `ca.crt` | `broadcast.callbackCaConfigMap`/`callbackCaKey` in the OpenAN CR, and the operator's `ALLOWED_CALLBACK_CA_CONFIGMAPS`: a ConfigMap in `OPENAN_NS` with extra CAs (PEM) for listeners with private certificates. Create it yourself; the Registry Center pod waits until it exists. Needs a Registry Center image with `broadcast.callback.ca.file`. |
 
 TMF639 from a `registry-center` checkout of the fork's `oda-integration` branch (before an upstream release). The profile
 URL follows the same branch, so it changes when the branch moves; use a commit or tag to pin it:
@@ -307,7 +308,15 @@ make openan-operator-image openan-operator OPENAN_RC_BUILD=true OPENAN_RC_TAG=sr
 ```
 
 To enable the `/hub` as well, add `OPENAN_BROADCAST_ENABLED=true OPENAN_BROADCAST_CALLBACK_HOSTS=<host>[,<host>...]`
-with the host names of the `https` listeners that will subscribe.
+with the host names of the `https` listeners that will subscribe. For a listener with a private certificate, put its CA in
+a ConfigMap and add `OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP=<name>`, for example:
+
+```bash
+kubectl -n components create configmap hub-listener-ca --from-file=ca.crt=ca.pem
+make openan-operator-image openan-operator OPENAN_RC_BUILD=true OPENAN_RC_TAG=src ... \
+  OPENAN_BROADCAST_ENABLED=true OPENAN_BROADCAST_CALLBACK_HOSTS=hub-listener.components.svc \
+  OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP=hub-listener-ca
+```
 
 Through the OpenAN CR, the operator restricts these values:
 

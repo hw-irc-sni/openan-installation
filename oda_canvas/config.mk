@@ -99,6 +99,11 @@ OPENAN_ALLOWED_SPEC_URL_PREFIXES=
 # cannot enable plain-HTTP callbacks.
 OPENAN_BROADCAST_ENABLED=false
 OPENAN_BROADCAST_CALLBACK_HOSTS=
+# ConfigMap in $(OPENAN_NS) with a PEM bundle of extra CAs for callback TLS (key OPENAN_BROADCAST_CALLBACK_CA_KEY), for
+# listeners with private certificates. It becomes broadcast.callbackCaConfigMap in the CR and the operator's
+# ALLOWED_CALLBACK_CA_CONFIGMAPS. The demo does not create it; the Registry Center pod does not start until it exists.
+OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP=
+OPENAN_BROADCAST_CALLBACK_CA_KEY=ca.crt
 # No published Orchestration Center image matches the current API: it is built from OPENAN_OC_SRC.
 OPENAN_OC_TAG=src
 OPENAN_OC_SRC=../../orchestration-center

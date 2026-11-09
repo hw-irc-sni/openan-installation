@@ -332,6 +332,7 @@ openan-operator:
 	  --set deployment.monitoredNamespaces='$(OPENAN_NS)' \
 	  $(if $(OPENAN_ALLOWED_SPEC_URL_PREFIXES),--set-string 'configmap.extra.ALLOWED_SPEC_URL_PREFIXES=$(subst $(comma),\$(comma),$(OPENAN_ALLOWED_SPEC_URL_PREFIXES))') \
 	  $(if $(OPENAN_BROADCAST_CALLBACK_HOSTS),--set-string 'configmap.extra.ALLOWED_CALLBACK_HOSTS=$(subst $(comma),\$(comma),$(OPENAN_BROADCAST_CALLBACK_HOSTS))') \
+	  $(if $(OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP),--set-string 'configmap.extra.ALLOWED_CALLBACK_CA_CONFIGMAPS=$(OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP)') \
 	  --wait --timeout 3m
 	@# `kind load` replaces the image under an unchanged tag: restart so the new build is the one running. `rollout status`
 	@# returns while the old pod is still terminating (it keeps reconciling for its 30 s grace period); two operators on
