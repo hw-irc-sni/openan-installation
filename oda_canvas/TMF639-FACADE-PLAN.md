@@ -2,8 +2,8 @@
 
 Status (2026-11-09):
 
-- §1–§4 (facade, hub and events) are implemented in `registry-center` on branch `feat/tmf639-facade` of the fork `hw-irc-sni/registry-center`, merged into the fork's `oda-integration` (e60f0f9). Not yet proposed upstream.
-- Deployed in the kind demo and verified end to end through the Canvas gateway, including the hub (§4.1).
+- §1–§4 (facade, hub and events) are implemented in `registry-center` on branch `feat/tmf639-facade` of the fork `hw-irc-sni/registry-center`, merged into the fork's `oda-integration` (e60f0f9). The callback CA bundle (`broadcast.callback.ca.file`) followed in c20e27f. Not yet proposed upstream.
+- Deployed in the kind demo and verified end to end through the Canvas gateway, including the hub: two runs, the second with signed callbacks and the chart's callback CA option (§4.1).
 - §5 (chart) is implemented in this repo.
 - §8 (catalog) is still a proposal.
 
@@ -135,6 +135,8 @@ heartbeat, health history/stream, keys, knowledge graph.
 
 ### 4.1 Demo verification (2026-11-09)
 
+Two runs on the same day. Run 1 is described first; run 2 (below) repeated it without the hand patch.
+
 Kind demo, Registry Center built from `oda-integration` (`OPENAN_RC_BUILD=true OPENAN_RC_TAG=src`), with
 `OPENAN_TMF639_ENABLED=true`, the profile URL on the fork's `oda-integration` branch, and
 `OPENAN_BROADCAST_ENABLED=true OPENAN_BROADCAST_CALLBACK_HOSTS=hub-listener.components.svc`.
@@ -161,9 +163,32 @@ Kind demo, Registry Center built from `oda-integration` (`OPENAN_RC_BUILD=true O
     characteristics, `resourceSpecification`, `relatedParty`). The Delete event carried the reference only.
   - `href` used `registry.publicBaseUrl`, so it pointed at the gateway URL.
   - The hub had no `secret`, so the callbacks carried no `X-Registry-Signature`, as documented.
-- **Not exercised:** `ResourceAttributeValueChangeEvent` and `ResourceStateChangeEvent`, signed callbacks, and
-  retry and degraded delivery. The unit tests in `registry-center` (`tests/test_tmf639_events.py`,
-  `tests/test_tmf639_api.py`) cover them.
+- **Run 2: callback CA option and signed callbacks.** The same test after `broadcast.callback.ca.file`
+  (registry-center c20e27f) and the chart values `broadcast.callbackCaConfigMap`/`callbackCaKey` existed.
+  - **Setup.** The Registry Center was built from `oda-integration` at c20e27f, with a rebuilt operator image. A
+    new throwaway CA was stored in the ConfigMap `hub-listener-ca` (key `ca.crt`), and the demo was deployed with
+    `OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP=hub-listener-ca`. No Deployment patch.
+  - **Wiring.** The operator had `ALLOWED_CALLBACK_HOSTS` and `ALLOWED_CALLBACK_CA_CONFIGMAPS` set by the demo
+    variables. The Registry Center had `REGISTRY_BROADCAST_CALLBACK_CA_FILE` pointing at the mounted bundle, and no
+    `SSL_CERT_FILE`. From the Registry Center pod, TLS to the listener succeeded with the bundle and was rejected with the
+    default CAs only.
+  - **Hub calls.** The hub was created with a `secret`. `POST /hub` returned 201 with `Location`, `GET /hub/{id}`
+    returned 200 and `DELETE /hub/{id}` returned 204. The hub representation does not return the secret.
+  - **Events.**
+
+    | Trigger | Callback received | Resource | Signature |
+    |---|---|---|---|
+    | `DELETE /resource/{id}` of `Sample-A2A-T-Agent` | `ResourceDeleteEvent`, about 0.4 s later | reference (4 fields) | `X-Registry-Signature: sha256=<64 hex>` |
+    | Operator restart, card sync registers the agent again | `ResourceCreateEvent` | full `LogicalResource` (13 fields) | `X-Registry-Signature: sha256=<64 hex>` |
+
+    Only the signature format was checked. The HMAC value was not recomputed, because the secret existed only in
+    the test script.
+  - **Cleanup.** Broadcast was turned off first, so the Registry Center no longer mounted the CA ConfigMap. Then the
+    listener, its Secret and both ConfigMaps were deleted.
+- **Not exercised:** `ResourceAttributeValueChangeEvent` and `ResourceStateChangeEvent`, HMAC verification of
+  the signatures, and retry and degraded delivery. The unit tests in `registry-center` cover them
+  (`tests/test_tmf639_events.py`, `tests/test_tmf639_api.py`, and `tests/test_broadcast_callback_ca.py` for the CA
+  bundle).
 
 ## 5. Chart changes (this repo, after the facade ships)
 
