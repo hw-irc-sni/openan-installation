@@ -1,6 +1,10 @@
 # Plan: TMF639 facade for the Registry Center (TMFC012 alignment)
 
-Status: proposal. Nothing here is implemented yet.
+Status (2026-11-09):
+
+- §1–§4 (facade, hub and events) are implemented in `registry-center` on branch `feat/tmf639-facade` of the fork `hw-irc-sni/registry-center`: commits 8dfab74 and 48f8892, not yet merged upstream.
+- §5 (chart) is implemented in this repo.
+- §8 (catalog) is still a proposal.
 
 ## Goal
 
@@ -60,13 +64,18 @@ example, in v5 `relatedParty` is a `RelatedPartyRefOrPartyRoleRef` wrapper (`rol
 | `category` | `A2AAgent` (fixed; lets consumers filter agents apart from Canvas `ODAComponent` entries) |
 | `resourceSpecification` | Without a catalog: a static ref `{name: "A2A AgentCard", version: card.protocolVersion}`. With a catalog: the catalog entry's `id`/`href` (§8). |
 | `relatedParty` | `provider.organization` with role `provider`; owner identity with role `owner` (owner/admin only) |
-| `administrativeState` | `published`→`unlocked`, `registered`/`rejected`→`locked`, `deprecated`→`shutdown` |
-| `operationalState` | health `healthy`/`suspect`→`enable`, `offline`→`disable`, `unknown`→omitted |
-| `resourceStatus` | `suspect`→`alarm`, `offline`→`suspended`, `unknown`→`unknown`, else `available` |
-| `resourceCharacteristic` | `agentCard` (the full **signed** card, verbatim), `url`, `protocolVersion`, `skills`, `tags`, `layer`, `reviewStatus` (exact RC status), `lastHeartbeat` |
+| `administrativeState` / `lifecycleState` | `published`→`unlocked`/`installed`, `registered`/`rejected`→`locked`/`planned`, `deprecated`→`shuttingDown`/`pendingRemoval` (v5 enums) |
+| `operationalState` / `availabilityStatus` | health `healthy`→`enabled`/`online`, `suspect`→`enabled`/`degraded`, `offline`→`disabled`/`offline`; `unknown` or heartbeat off → both omitted, `unknownStatus: true`. v5 has no `resourceStatus`. |
+| `resourceVersion`, `creationDate` | `card.version`; registration time |
+| `resourceCharacteristic` | `agentCard` (the stored **signed** card, camelCase), `url` and `protocolVersion` (from the first `supportedInterfaces` entry; v1 cards have no top-level url), `skills`, `tags`, `layer`, `reviewStatus` (exact RC status), `healthStatus`, `lastHeartbeat` |
 
-Visibility stays exactly as in RC: unpublished cards are visible only to their owner and to admins,
-and Milvus-only mode answers 503 where RC does.
+Visibility (as implemented): callers see discoverable cards (published, not hidden by heartbeat
+filtering) plus the cards they own (verified owner); admins (token mode, `nms_oss`) see every state.
+Any other unpublished card is 404 on every method, and a 403 on someone else's visible card does not
+name the owner. Milvus-only mode answers 503 where RC does.
+
+Implemented in `registry-center` branch `feat/tmf639-facade` (`agent_registry/tmf639/`), §1–§3; the
+API Reference section "TMF639 Resource Inventory facade" there is the authoritative contract.
 
 ## 3. Operations
 
@@ -100,7 +109,8 @@ heartbeat, health history/stream, keys, knowledge graph.
   The TMF639 hub therefore means "**published-agent inventory changes**". A `POST /resource` that
   lands as `registered` produces no event until it is approved. This must be documented, because a
   TMF consumer would otherwise expect a create event on every POST.
-- Event mapping. TMF639 v5 names; confirm the exact casing against the v5 OAS. TMFC012's
+- Event mapping. TMF639 v5 names, confirmed against the v5.0.0 OAS: `/hub`, `GET`/`DELETE /hub/{id}`, and listeners for the
+  four events below. TMFC012's
   published-events table lists the v4 names: `resourceCreateEvent`, `resourceChangeEvent`,
   `resourceDeleteEvent`, `resourceAttributeValueChangeEvent`.
 
@@ -109,14 +119,33 @@ heartbeat, health history/stream, keys, knowledge graph.
   | `AGENT_REGISTERED` | `ResourceCreateEvent` | full mapped resource |
   | `AGENT_UPDATED` | `ResourceAttributeValueChangeEvent` | full mapped resource |
   | `AGENT_DEREGISTERED` | `ResourceDeleteEvent` | `id`, `href`, `name` only |
-  | `AGENT_REVIEW_DEPRECATED` | `ResourceStateChangeEvent` (`administrativeState: shutdown`) | `id`, `href`, `name`, state only; no card |
+  | `AGENT_REVIEW_DEPRECATED` | `ResourceStateChangeEvent` (`administrativeState: shuttingDown`) | `id`, `href`, `name`, state only; no card. Forwarded only when `from_status` was `published`: the native event is not discoverability-gated. |
   | `AGENT_REVIEW_REJECTED` | not forwarded | a rejected card was never public |
-  | `AGENT_HEALTH_CHANGED` | `ResourceStateChangeEvent` (`operationalState`, `resourceStatus`) | only for published cards |
+  | `AGENT_HEALTH_CHANGED` | `ResourceStateChangeEvent` (`operationalState`, `availabilityStatus`) | only for published cards |
   | `SYNC_REQUIRED` | not forwarded | Facade consumers re-list with `GET /resource`. TMF639 has no change-feed cursor; RC's `/changes?since=` stays on the native API. |
-- RC's current limits carry over (best effort, no retry after failure) and must be stated in the
-  component description.
+- As implemented:
+  - Each event is POSTed on its own to `callback` exactly as given, like the Canvas reference TMF639
+    service. The hub `query` supports only `eventType=...`.
+  - Delivery is at-least-once: retries happen in process, then through the durable retry sweep, up to
+    `broadcast.delivery.max.attempts`.
+  - Order is not guaranteed across retries.
+  - Over the rate limit, events stay pending instead of degrading to `SYNC_REQUIRED`.
+  - The API Reference in `registry-center` is the contract.
 
 ## 5. Chart changes (this repo, after the facade ships)
+
+Implemented in chart 0.2.0 with these differences from the list below:
+
+- **Hub wiring.** `broadcast.enabled`, `broadcast.callbackAllowlist` and `broadcast.allowHttpCallbacks`
+  are first-class values. They are generated env, because the operator rejects `ALLOWLIST` in `extraEnv`.
+  `publishedEvents` is rendered only when both `tmf639.enabled` and `broadcast.enabled` are set.
+- **Profile URL.** `tmf639.specificationUrl` has no default and is required when TMF639 is enabled.
+  The canonical TMF OAS URL is refused. The profile lives at `registry-center/docs/openapi/tmf639-a2a-agent-v5.yaml`;
+  use a pinned upstream tag once it is merged.
+- **Catalog.** `catalog.*` only declares the DependentAPI. No `REGISTRY_CATALOG_*` env is generated until §8 exists in RC.
+- **CI pin.** The `deployment-contract.yml` pin is unchanged. It only feeds the Compose smoke test, which
+  doesn't use TMF639, and AGENTS.md forbids pinning fork commits.
+- **Operator.** `GENERATED_ENV` lists the four new keys.
 
 `charts/openan-registry-center`:
 

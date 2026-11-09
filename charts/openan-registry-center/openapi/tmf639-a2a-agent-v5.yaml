@@ -1,0 +1,300 @@
+openapi: 3.0.3
+info:
+  title: Registry Center TMF639 Resource Inventory profile (A2A agents)
+  version: 5.0.0
+  description: |
+    Profile of TMF639 Resource Inventory Management v5.0.0 implemented by the
+    OpenAN Registry Center (agent_registry/tmf639). Each registered A2A
+    AgentCard is a LogicalResource with category `A2AAgent`.
+
+    Only what is listed here is implemented. In particular:
+    - the resource id is opaque: base64url(organization) "." base64url(name)
+    - POST and PATCH carry the signed AgentCard in the `agentCard`
+      characteristic (and optionally `layer`); every other attribute is derived
+    - PATCH accepts JSON Merge Patch only; review state changes use the native API
+    - `filter`, `sort`, `before` and `after` answer 501
+    - the hub announces changes to the *published* inventory only; a POST that
+      lands pending review produces no event until the card is approved
+    - errors use the TMF630 Error body
+  license:
+    name: Apache-2.0
+servers:
+  - url: /tmf-api/resourceInventoryManagement/v5
+tags:
+  - name: resource
+  - name: events subscription
+paths:
+  /resource:
+    get:
+      tags: [resource]
+      operationId: listResource
+      summary: List agent resources visible to the caller
+      parameters:
+        - $ref: '#/components/parameters/Fields'
+        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
+        - {name: name, in: query, schema: {type: string}, description: Exact match; comma means OR}
+        - {name: category, in: query, schema: {type: string}}
+        - {name: administrativeState, in: query, schema: {$ref: '#/components/schemas/ResourceAdministrativeStateType'}}
+        - {name: operationalState, in: query, schema: {$ref: '#/components/schemas/ResourceOperationalStateType'}}
+        - {name: lifecycleState, in: query, schema: {type: string}}
+        - {name: availabilityStatus, in: query, schema: {type: string}}
+        - {name: relatedParty.name, in: query, schema: {type: string}, description: Provider organization}
+      responses:
+        '200':
+          description: Success
+          headers:
+            X-Total-Count: {schema: {type: integer}}
+            X-Result-Count: {schema: {type: integer}}
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/LogicalResource'}}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '501': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    post:
+      tags: [resource]
+      operationId: createResource
+      summary: Register a signed AgentCard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LogicalResource_FVO'}
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LogicalResource'}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /resource/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [resource]
+      operationId: retrieveResource
+      parameters:
+        - $ref: '#/components/parameters/Fields'
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LogicalResource'}
+        '404': {$ref: '#/components/responses/Error'}
+    patch:
+      tags: [resource]
+      operationId: patchResource
+      summary: Replace the signed AgentCard (JSON Merge Patch)
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: {$ref: '#/components/schemas/LogicalResource_MVO'}
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LogicalResource'}
+        '400': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '415': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [resource]
+      operationId: deleteResource
+      responses:
+        '204': {description: Deleted}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+  /hub:
+    post:
+      tags: [events subscription]
+      operationId: createHub
+      summary: Subscribe to published-inventory change events
+      description: |
+        Needs the Registry Center change broadcast (`broadcast.enabled=true`)
+        and a callback host in `broadcast.callback.allowlist`. Each event is
+        POSTed on its own to `callback` as given; with a `secret`, the body is
+        signed in `X-Registry-Signature` (HMAC-SHA256 over "<X-Registry-Timestamp>.<body>").
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Hub_FVO'}
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Hub'}
+        '400': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /hub/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [events subscription]
+      operationId: getHub
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Hub'}
+        '404': {$ref: '#/components/responses/Error'}
+    delete:
+      tags: [events subscription]
+      operationId: hubDelete
+      responses:
+        '204': {description: Deleted}
+        '404': {$ref: '#/components/responses/Error'}
+components:
+  parameters:
+    Id: {name: id, in: path, required: true, schema: {type: string}}
+    Fields: {name: fields, in: query, schema: {type: string}, description: 'Comma-separated top-level attributes; id, href and @type are always returned'}
+    Offset: {name: offset, in: query, schema: {type: integer, minimum: 0}}
+    Limit: {name: limit, in: query, schema: {type: integer, minimum: 0}}
+  responses:
+    Error:
+      description: TMF630 error
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    ResourceAdministrativeStateType: {type: string, enum: [locked, unlocked, shuttingDown]}
+    ResourceOperationalStateType: {type: string, enum: [enabled, disabled]}
+    Characteristic:
+      type: object
+      required: [name, value]
+      properties:
+        '@type': {type: string, enum: [StringCharacteristic, StringArrayCharacteristic, ObjectCharacteristic]}
+        name:
+          type: string
+          description: |
+            agentCard (signed AgentCard, writable), layer (writable), reviewStatus, skills,
+            tags, url, protocolVersion, healthStatus, lastHeartbeat
+        valueType: {type: string}
+        value: {}
+    RelatedPartyRefOrPartyRoleRef:
+      type: object
+      properties:
+        '@type': {type: string, enum: [RelatedPartyRefOrPartyRoleRef]}
+        role: {type: string, enum: [provider, owner], description: owner is shown to administrators only}
+        partyOrPartyRole:
+          type: object
+          properties:
+            '@type': {type: string}
+            id: {type: string}
+            name: {type: string}
+    LogicalResource:
+      type: object
+      required: [id, href, '@type']
+      properties:
+        id: {type: string}
+        href: {type: string}
+        '@type': {type: string, enum: [LogicalResource]}
+        '@baseType': {type: string, enum: [Resource]}
+        name: {type: string}
+        description: {type: string}
+        resourceVersion: {type: string}
+        category: {type: string, enum: [A2AAgent]}
+        administrativeState: {$ref: '#/components/schemas/ResourceAdministrativeStateType'}
+        operationalState: {$ref: '#/components/schemas/ResourceOperationalStateType'}
+        lifecycleState: {type: string, enum: [planned, installed, pendingRemoval]}
+        availabilityStatus: {type: string, enum: [online, degraded, offline]}
+        unknownStatus: {type: boolean}
+        creationDate: {type: string}
+        resourceSpecification:
+          type: object
+          properties:
+            '@type': {type: string}
+            id: {type: string, enum: [A2AAgentCard]}
+            name: {type: string}
+            version: {type: string}
+        relatedParty:
+          type: array
+          items: {$ref: '#/components/schemas/RelatedPartyRefOrPartyRoleRef'}
+        resourceCharacteristic:
+          type: array
+          items: {$ref: '#/components/schemas/Characteristic'}
+    LogicalResource_FVO:
+      type: object
+      required: [resourceCharacteristic]
+      properties:
+        '@type': {type: string, enum: [LogicalResource, Resource]}
+        name: {type: string, description: Must match the AgentCard name when given}
+        category: {type: string, enum: [A2AAgent]}
+        resourceCharacteristic:
+          type: array
+          description: Must contain agentCard; may contain layer
+          items: {$ref: '#/components/schemas/Characteristic'}
+    LogicalResource_MVO:
+      type: object
+      required: [resourceCharacteristic]
+      additionalProperties: false
+      properties:
+        '@type': {type: string}
+        resourceCharacteristic:
+          type: array
+          description: agentCard (required) and layer only
+          items: {$ref: '#/components/schemas/Characteristic'}
+    Hub_FVO:
+      type: object
+      required: [callback]
+      properties:
+        callback: {type: string, description: HTTPS URL whose host is in broadcast.callback.allowlist}
+        query:
+          type: string
+          description: |
+            Only `eventType=<event>[,<event>...]`. Events: ResourceCreateEvent,
+            ResourceAttributeValueChangeEvent, ResourceStateChangeEvent,
+            ResourceDeleteEvent. Empty means all.
+        secret: {type: string, description: Registry Center extension; enables X-Registry-Signature. Never returned.}
+    Hub:
+      type: object
+      required: [id, callback]
+      properties:
+        '@type': {type: string, enum: [Hub]}
+        id: {type: string}
+        callback: {type: string}
+        query: {type: string}
+    Event:
+      type: object
+      description: Body POSTed to a hub callback, one event per request
+      properties:
+        '@type':
+          type: string
+          enum: [ResourceCreateEvent, ResourceAttributeValueChangeEvent, ResourceStateChangeEvent, ResourceDeleteEvent]
+        '@baseType': {type: string, enum: [Event]}
+        eventId: {type: string}
+        eventTime: {type: string, format: date-time}
+        eventType: {type: string}
+        title: {type: string}
+        domain: {type: string}
+        event:
+          type: object
+          properties:
+            resource: {$ref: '#/components/schemas/LogicalResource'}
+    Error:
+      type: object
+      required: [code, reason]
+      properties:
+        '@type': {type: string, enum: [Error]}
+        code: {type: string}
+        reason: {type: string}
+        message: {type: string}
+        status: {type: string}

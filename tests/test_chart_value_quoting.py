@@ -46,3 +46,14 @@ def _keys(node):
     elif isinstance(node, list):
         for v in node:
             yield from _keys(v)
+
+
+@pytest.mark.parametrize("key", ["tmf639.specificationUrl", "catalog.specificationUrl", "broadcast.callbackAllowlist",
+                                 "component.id", "component.functionalBlock"])
+def test_tmf639_values_never_add_yaml_structure(key):
+    payload = "x\n        hostNetwork: true\n        injected: yes"
+    r = template("openan-registry-center", "--set", "tmf639.enabled=true", "--set", "tmf639.specificationUrl=https://p/x.yaml",
+                 "--set", "catalog.enabled=true", "--set", "broadcast.enabled=true",
+                 "--set", "broadcast.callbackAllowlist=l.example", "--set-string", f"{key}={payload}")
+    out = r.stdout if r.returncode == 0 else ""
+    assert "hostNetwork" not in [k for d in yaml.safe_load_all(out) if d for k in _keys(d)]

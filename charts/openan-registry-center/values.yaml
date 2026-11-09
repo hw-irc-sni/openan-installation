@@ -1,8 +1,8 @@
 # ODA Component identity (Component name is <release>-<component.name>).
 component:
-  id: OPENAN-RC
+  id: ""               # default OPENAN-RC; TMFC012 when tmf639.enabled
   name: registrycenter
-  functionalBlock: AIAgentRegistry
+  functionalBlock: ""  # default AIAgentRegistry; Production when tmf639.enabled
   publicationDate: "2026-11-01T00:00:00.000Z"
   version: 0.1.0
   apipolicy:
@@ -34,6 +34,29 @@ registry:
   signatureValidation: true
   extraEnv: {}           # non-secret REGISTRY_* settings (e.g. trusted key allowlist)
   modelsYaml: ""         # optional complete models.yaml content; empty -> empty models map
+
+# TMF639 Resource Inventory v5 facade (TMFC012 alignment). Needs a registry-center image with agent_registry/tmf639.
+# When false the Component renders exactly as before.
+tmf639:
+  enabled: false
+  # REQUIRED when enabled: release-independent URL of the TMF639 v5 profile, i.e. registry-center
+  # docs/openapi/tmf639-a2a-agent-v5.yaml at a pinned tag or commit. Never the canonical TMF OAS URL:
+  # the Canvas matches dependencies by exact URL, so that would serve every TMF639 dependency in the cluster.
+  specificationUrl: ""
+
+# Native change broadcast (webhook subscriptions and the TMF639 /hub). Events go only to listed hosts.
+broadcast:
+  enabled: false
+  callbackAllowlist: ""   # comma-separated callback hosts; required when enabled
+  allowHttpCallbacks: false   # plain-HTTP callbacks (in-cluster listeners without TLS)
+
+# Optional TMF634 Resource Catalog dependency (TMFC012 declares it required). It only declares the
+# DependentAPI: the Registry Center does not check cards against a catalog yet. The Canvas ignores
+# `required: false` when computing status, so the Component stays InProgress until a catalog
+# declaring exactly this URL is deployed.
+catalog:
+  enabled: false
+  specificationUrl: "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF634_Resource_Catalog/5.0.0/swagger/TMF634-Resource_Catalog_Management-v5.0.0.oas.yaml"
 persistence:
   size: 5Gi
   storageClassName: ""

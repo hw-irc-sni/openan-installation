@@ -225,3 +225,95 @@ def test_prepare_runtime_stays_non_root_when_disabled_or_without_a_pod_user(char
 def test_prepare_runtime_rejects_non_positive_pod_user(chart, key, bad):
     err = render(chart, {f"podSecurityContext.{key}": bad}, success=False)
     assert "must be positive integers" in err
+
+
+# ---------- TMFC012 alignment (tmf639.*, broadcast.*, catalog.*) ----------
+
+PROFILE = "https://raw.githubusercontent.com/project-openan/registry-center/v1.2.0/docs/openapi/tmf639-a2a-agent-v5.yaml"
+TMF639 = {"tmf639.enabled": "true", "tmf639.specificationUrl": PROFILE}
+BROADCAST = {"broadcast.enabled": "true", "broadcast.callbackAllowlist": "listener.example"}
+
+
+def _rc(settings=None):
+    docs = render("openan-registry-center", settings)
+    comp = next(d for d in docs if d["kind"] == "Component")
+    env = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-config"))["data"]
+    return comp["spec"], env
+
+
+def test_tmf639_off_keeps_the_native_component():
+    spec, env = _rc()
+    assert spec["componentMetadata"]["id"] == "OPENAN-RC"
+    assert spec["componentMetadata"]["functionalBlock"] == "AIAgentRegistry"
+    assert [api["name"] for api in spec["coreFunction"]["exposedAPIs"]] == ["agentregistry"]
+    assert "required" not in spec["coreFunction"]["exposedAPIs"][0]
+    assert spec["coreFunction"]["dependentAPIs"] == []
+    assert spec["eventNotification"]["publishedEvents"] == []
+    assert (env["REGISTRY_TMF639_ENABLED"], env["REGISTRY_BROADCAST_ENABLED"]) == ("false", "false")
+
+
+def test_tmf639_on_declares_tmfc012_with_the_profile_url():
+    spec, env = _rc(TMF639)
+    meta = spec["componentMetadata"]
+    assert (meta["id"], meta["functionalBlock"]) == ("TMFC012", "Production")
+    assert meta["eTom"] == ["1.5.4", "1.5.4.5"] and meta["SID"] == ["Resource_ABE"]
+    assert "Deviations from TMFC012" in meta["description"]
+    tmf, native = spec["coreFunction"]["exposedAPIs"]
+    assert (tmf["id"], tmf["apiSDO"], tmf["required"]) == ("TMF639", "tmForum", True)
+    assert tmf["specification"] == [{"url": PROFILE, "version": "5.0.0"}]
+    assert tmf["path"] == "/rel-registrycenter/tmf-api/resourceInventoryManagement/v5"
+    assert tmf["port"] == native["port"] and tmf["implementation"] == native["implementation"]
+    assert tmf["gatewayConfiguration"] == native["gatewayConfiguration"]
+    assert native["required"] is False
+    assert env["REGISTRY_TMF639_ENABLED"] == "true"
+    # no hub delivery without the change broadcast, so no published events are declared
+    assert spec["eventNotification"]["publishedEvents"] == []
+
+
+def test_component_identity_overrides_still_win():
+    spec, _ = _rc({**TMF639, "component.id": "MY-RC", "component.functionalBlock": "Custom"})
+    assert (spec["componentMetadata"]["id"], spec["componentMetadata"]["functionalBlock"]) == ("MY-RC", "Custom")
+
+
+@pytest.mark.parametrize("settings, message", [
+    ({"tmf639.enabled": "true"}, "tmf639.specificationUrl is required"),
+    ({"tmf639.enabled": "true", "tmf639.specificationUrl":
+      "https://tmf-open-api-table-documents.s3.eu-west-1.amazonaws.com/OpenApiTable/TMF639_Resource_Inventory/5.0.0/"
+      "swagger/TMF639-Resource_Inventory_Management-v5.0.0.oas.yaml"}, "must not be the canonical"),
+    ({"broadcast.enabled": "true"}, "broadcast.callbackAllowlist is required"),
+    ({"catalog.enabled": "true", "catalog.specificationUrl": ""}, "catalog.specificationUrl is required"),
+])
+def test_tmf639_misconfiguration_fails_the_render(settings, message):
+    assert message in render("openan-registry-center", settings, success=False)
+
+
+def test_hub_events_are_published_with_tmf639_and_broadcast():
+    spec, env = _rc({**TMF639, **BROADCAST})
+    (event,) = spec["eventNotification"]["publishedEvents"]
+    assert event["specification"][0]["url"] == PROFILE
+    assert set(event["specification"][0]["events"]) == {
+        "ResourceCreateEvent", "ResourceAttributeValueChangeEvent", "ResourceStateChangeEvent", "ResourceDeleteEvent"}
+    assert env["REGISTRY_BROADCAST_ENABLED"] == "true"
+    assert env["REGISTRY_BROADCAST_CALLBACK_ALLOWLIST"] == "listener.example"
+    assert env["REGISTRY_BROADCAST_ALLOW_HTTP_CALLBACKS"] == "false"
+
+
+@pytest.mark.parametrize("tmf639", [False, True])
+@pytest.mark.parametrize("catalog", [False, True])
+def test_tmf634_dependency_is_rendered_only_with_catalog_enabled(tmf639, catalog):
+    settings = {**(TMF639 if tmf639 else {}), "catalog.enabled": str(catalog).lower()}
+    spec, _ = _rc(settings)
+    deps = spec["coreFunction"]["dependentAPIs"]
+    if not catalog:
+        assert deps == []
+        return
+    (dep,) = deps
+    assert (dep["id"], dep["required"]) == ("TMF634", False)
+    assert dep["specification"][0]["url"].endswith("TMF634-Resource_Catalog_Management-v5.0.0.oas.yaml")
+
+
+def test_tmf639_profile_is_served_by_the_spec_sidecar():
+    docs = render("openan-registry-center")
+    spec_cm = next(d for d in docs if d["metadata"]["name"].endswith("-openapi"))
+    profile = yaml.safe_load(spec_cm["data"]["tmf639-a2a-agent-v5.yaml"])
+    assert profile["openapi"].startswith("3.") and {"/resource", "/resource/{id}", "/hub", "/hub/{id}"} <= set(profile["paths"])

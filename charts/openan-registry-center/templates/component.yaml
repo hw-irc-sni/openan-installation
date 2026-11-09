@@ -2,6 +2,17 @@
 {{- if not .Values.image.tag }}{{ fail "image.tag is required" }}{{- end }}
 {{- if not .Values.runtimeSecret }}{{ fail "runtimeSecret is required" }}{{- end }}
 {{- if not .Values.credentialSecret }}{{ fail "credentialSecret is required" }}{{- end }}
+{{- $tmf639 := eq (include "rc.tmf639" .) "true" }}
+{{- $broadcast := eq (include "rc.broadcast" .) "true" }}
+{{- $catalog := eq (include "rc.catalog" .) "true" }}
+{{- if $tmf639 }}
+{{- if not .Values.tmf639.specificationUrl }}{{ fail "tmf639.specificationUrl is required when tmf639.enabled (the release-independent TMF639 profile URL)" }}{{- end }}
+{{- /* Canvas resolves dependencies by exact specification URL: declaring the canonical TMF OAS
+       would make this component the TMF639 provider for every other component in the cluster. */}}
+{{- if contains "tmf-open-api-table-documents" .Values.tmf639.specificationUrl }}{{ fail "tmf639.specificationUrl must not be the canonical TMF639 OAS URL; use the Registry Center profile URL" }}{{- end }}
+{{- end }}
+{{- if and $broadcast (not .Values.broadcast.callbackAllowlist) }}{{ fail "broadcast.callbackAllowlist is required when broadcast.enabled" }}{{- end }}
+{{- if and $catalog (not .Values.catalog.specificationUrl) }}{{ fail "catalog.specificationUrl is required when catalog.enabled" }}{{- end }}
 apiVersion: oda.tmforum.org/v1
 kind: Component
 metadata:
@@ -10,13 +21,25 @@ metadata:
     oda.tmforum.org/componentName: {{ include "rc.componentName" . }}
 spec:
   componentMetadata:
-    id: {{ .Values.component.id | quote }}
+    id: {{ include "rc.componentId" . | quote }}
     name: {{ .Values.component.name | quote }}
-    functionalBlock: {{ .Values.component.functionalBlock | quote }}
+    functionalBlock: {{ include "rc.functionalBlock" . | quote }}
     publicationDate: {{ .Values.component.publicationDate | quote }}
     status: specified
     version: {{ .Values.component.version | quote }}
+    {{- if $tmf639 }}
+    description: >-
+      OpenAN Registry Center: registry and semantic search of signed A2A Agent Cards, exposed as a
+      TMFC012 Resource Inventory of A2A agents (TMF639 v5 profile). Deviations from TMFC012: TMF634
+      Resource Catalog is optional (cards are validated against the A2A AgentCard schema and their
+      signature); POST and PATCH accept only signed agentCard payloads and PATCH replaces the whole
+      card; events cover published agents only; the TMF639 specification is a release-independent
+      profile URL, not the canonical TMF OAS; TMF685, TMF716 and TMF701 are not exposed.
+    eTom: ["1.5.4", "1.5.4.5"]
+    SID: ["Resource_ABE"]
+    {{- else }}
     description: "OpenAN Registry Center: registry and semantic search of signed A2A Agent Cards."
+    {{- end }}
     maintainers:
     - name: OpenAN
       email: openan@example.invalid
@@ -25,23 +48,65 @@ spec:
       email: openan@example.invalid
   coreFunction:
     exposedAPIs:
+    {{- if $tmf639 }}
+    - name: tmf639
+      id: TMF639
+      apiSDO: tmForum
+      required: true
+      specification:
+      - url: {{ .Values.tmf639.specificationUrl | quote }}
+        version: "5.0.0"
+      resources:
+      - resource: [GET, GET /id, POST, PATCH, DELETE]
+      implementation: {{ include "rc.fullname" . }}
+      apiType: openapi
+      path: /{{ include "rc.componentName" . }}/tmf-api/resourceInventoryManagement/v5
+      port: {{ int .Values.port }}
+      gatewayConfiguration: {{- include "rc.gatewayConfiguration" . | nindent 8 }}
+    {{- end }}
     - name: agentregistry
+      {{- if $tmf639 }}
+      required: false
+      {{- end }}
       specification:
       - url: "http://{{ include "rc.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ int .Values.specPort }}/registry-center.yaml"
       implementation: {{ include "rc.fullname" . }}
       apiType: openapi
       path: /{{ include "rc.componentName" . }}/rest/v1/registry-center
       port: {{ int .Values.port }}
-      gatewayConfiguration:
-        apiKeyVerification: {{ .Values.component.apipolicy.apiKeyVerification | toYaml | nindent 10 }}
-        rateLimit: {{ .Values.component.apipolicy.rateLimit | toYaml | nindent 10 }}
-        quota: {{ .Values.component.apipolicy.quota | toYaml | nindent 10 }}
-        OASValidation: {{ .Values.component.apipolicy.OASValidation | toYaml | nindent 10 }}
-        CORS: {{ .Values.component.apipolicy.CORS | toYaml | nindent 10 }}
-        template: {{ .Values.component.apipolicy.template | quote }}
+      gatewayConfiguration: {{- include "rc.gatewayConfiguration" . | nindent 8 }}
+    {{- if $catalog }}
+    # Optional TMF634 Resource Catalog (TMFC012 lists it as required; see oda_canvas/TMF639-FACADE-PLAN.md).
+    # The Canvas ignores `required` when computing status: the Component stays InProgress until a
+    # provider declaring exactly this specification URL exists.
+    dependentAPIs:
+    - name: tmf634
+      id: TMF634
+      apiSDO: tmForum
+      required: false
+      apiType: openapi
+      specification:
+      - url: {{ .Values.catalog.specificationUrl | quote }}
+        version: "5.0.0"
+      resources:
+      - resourceSpecification: [GET, GET /id]
+    {{- else }}
     dependentAPIs: []
+    {{- end }}
   eventNotification:
+    {{- if and $tmf639 $broadcast }}
+    # Delivered through the TMF639 /hub (TMF630 callbacks), not a Canvas event topic.
+    publishedEvents:
+    - name: resourceinventory
+      description: TMF639 v5 events for published A2A agents, delivered to /hub subscribers.
+      specification:
+      - url: {{ .Values.tmf639.specificationUrl | quote }}
+        version: "5.0.0"
+        apiType: openapi
+        events: [ResourceCreateEvent, ResourceAttributeValueChangeEvent, ResourceStateChangeEvent, ResourceDeleteEvent]
+    {{- else }}
     publishedEvents: []
+    {{- end }}
     subscribedEvents: []
   managementFunction:
     exposedAPIs: []

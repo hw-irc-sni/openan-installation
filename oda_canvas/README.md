@@ -265,6 +265,20 @@ version in `PORTAL_SRC`; otherwise it prints the command. These settings need ca
 Center (`openan-registry-center-registry-center.$OPENAN_NS:5000`), for the portal's AI Registries > Agents section. The Registry
 Center only exists after `make bootstrap-openan`. No `REGISTRY_CENTER_TOKEN` is set.
 
+**TMF639 / TMFC012 (optional, off in the demo).** `charts/openan-registry-center` 0.2.0 can declare the Registry Center as a
+TMFC012 Resource Inventory of A2A agents (plan and deviations: [`TMF639-FACADE-PLAN.md`](TMF639-FACADE-PLAN.md)). Set these
+in the chart values, or under `registryCenter.values` in the OpenAN CR. They need a `registry-center` image that contains
+`agent_registry/tmf639`.
+
+| Value | Effect |
+|---|---|
+| `tmf639.enabled` | Exposes `TMF639` (`/<component>/tmf-api/resourceInventoryManagement/v5`, `required: true`); the native API becomes `required: false`; `componentMetadata` becomes `TMFC012` / `Production` unless `component.id` / `component.functionalBlock` are set. |
+| `tmf639.specificationUrl` | Required with `tmf639.enabled`: the release-independent profile `registry-center/docs/openapi/tmf639-a2a-agent-v5.yaml` at a pinned tag or commit. The canonical TMF OAS URL is refused, because the Canvas matches dependencies by exact URL and would route every TMF639 consumer here. |
+| `broadcast.enabled`, `broadcast.callbackAllowlist`, `broadcast.allowHttpCallbacks` | Change broadcast for the TMF639 `/hub` (and native webhooks); the allowlist is required. With `tmf639.enabled` the four TMF639 events are declared under `publishedEvents` (delivered as TMF630 callbacks, not a Canvas topic). |
+| `catalog.enabled`, `catalog.specificationUrl` | Declares the optional `TMF634` DependentAPI. Only the declaration: the Registry Center does not check cards against a catalog yet (plan §8). The Canvas ignores `required: false`, so the Component stays `InProgress` until a catalog with exactly that URL exists. |
+
+Set `registry.publicBaseUrl` to the gateway URL with the component prefix so resource and event `href`s resolve for clients.
+
 **Helm repository.** The charts in `charts/` (`openan-operator`, `openan-registry-center`, `openan-orchestration-center`,
 `openan-frontend`) are also published as a Helm repository on GitHub Pages (`gh-pages` branch, by
 `.github/workflows/release-charts.yml`; see the repository `README.md`):

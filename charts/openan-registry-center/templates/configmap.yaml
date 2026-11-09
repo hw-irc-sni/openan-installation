@@ -17,6 +17,10 @@ data:
     "REGISTRY_REGISTRY_PUBLIC_BASE_URL" (.Values.registry.publicBaseUrl | toString)
     "REGISTRY_REGISTRY_SIGN_ENABLED" "false"
     "REGISTRY_SIGNATURE_VALIDATION_ENABLED" (.Values.registry.signatureValidation | toString)
+    "REGISTRY_TMF639_ENABLED" (include "rc.tmf639" .)
+    "REGISTRY_BROADCAST_ENABLED" (include "rc.broadcast" .)
+    "REGISTRY_BROADCAST_CALLBACK_ALLOWLIST" (.Values.broadcast.callbackAllowlist | toString)
+    "REGISTRY_BROADCAST_ALLOW_HTTP_CALLBACKS" (eq (toString .Values.broadcast.allowHttpCallbacks) "true" | toString)
     "PERSISTENCE_MODE" "file"
     "LLM_CONFIG_FILE" "/opt/registry-center/etc/config/models.yaml" }}
   {{- /* Generated keys are merged last: an extraEnv entry can never override them. */}}
@@ -46,3 +50,7 @@ metadata:
 data:
   registry-center.yaml: |
     {{- .Files.Get "openapi/registry-center.yaml" | nindent 4 }}
+  # Copy of registry-center docs/openapi/tmf639-a2a-agent-v5.yaml, for the gateway and developer UI only:
+  # the Component declares tmf639.specificationUrl, never this release-specific in-cluster URL.
+  tmf639-a2a-agent-v5.yaml: |
+    {{- .Files.Get "openapi/tmf639-a2a-agent-v5.yaml" | nindent 4 }}
