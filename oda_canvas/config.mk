@@ -136,3 +136,11 @@ AGENTGATEWAY_NS=$(CANVAS_NS)
 # Must match charts/agentgateway/values.yaml (agentgateway-standalone.image and testMcpServer.image).
 AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway:v1.7.0
 TEST_MCP_SERVER_IMAGE=tmforumodacanvas/test-mcp-server:0.1.0
+
+# CSP knowledge sample (`make csp-knowledge-sample`, not part of the bootstraps): the c-kg knowledge-graph MCP server, built
+# from CSP_KNOWLEDGE_SRC and loaded into kind, deployed next to agentgateway and registered there as MCP target csp-knowledge.
+CSP_KNOWLEDGE_SRC=../../../knowledge/c-kg
+CSP_KNOWLEDGE_IMAGE=c-kg:sample
+CSP_KNOWLEDGE_NS=$(AGENTGATEWAY_NS)
+# RDF base of the graph's named graphs and instance IRIs (C_KG_BASE_IRI): keep it fixed once data exists.
+CSP_KNOWLEDGE_BASE_IRI=http://c-kg.net

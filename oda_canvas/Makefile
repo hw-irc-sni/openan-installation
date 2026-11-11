@@ -41,7 +41,8 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
         oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify openan-clean bootstrap-openan openan-credentials \
         agentgateway-image agentgateway k8s-dashboard k8s-dashboard-token k8s-dashboard-port-forward \
-        k8s-dashboard-port-forward-stop k8s-dashboard-clean
+        k8s-dashboard-port-forward-stop k8s-dashboard-clean csp-knowledge-image csp-knowledge-sample csp-knowledge-verify \
+        csp-knowledge-clean
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -488,6 +489,73 @@ k8s-dashboard-clean:
 	kubectl delete clusterrolebinding dashboard-user dashboard-admin --ignore-not-found
 	helm uninstall kubernetes-dashboard -n $(K8S_DASHBOARD_NS) --ignore-not-found
 	kubectl delete namespace $(K8S_DASHBOARD_NS) --ignore-not-found
+
+# ---- CSP knowledge sample (c-kg MCP server behind agentgateway) -------------------------------------------
+# c-kg (CSP_KNOWLEDGE_SRC; docs/deployment.md there) as Deployment csp-knowledge in CSP_KNOWLEDGE_NS (the agentgateway
+# namespace), registered in agentgateway's live config as MCP target csp-knowledge: the portal's AI Gateways page shows it,
+# and clients reach its tools on the gateway's /mcp as csp-knowledge_<tool>. Needs `make agentgateway`; not part of
+# `make bootstrap-openan`. c-kg requires a Bearer key: it is generated once into Secret csp-knowledge-api-key and copied to
+# agentgateway-llm-keys (mounted in the gateway at /llm-keys), the way the portal stores MCP tokens.
+CSP_KNOWLEDGE_TARGET := csp-knowledge
+CSP_KNOWLEDGE_KEY := csp-knowledge-api-key
+CSP_KNOWLEDGE_RENDERED := .rendered/csp-knowledge.yaml
+AGW_MCP_URL := http://$(AGW_RELEASE).$(AGENTGATEWAY_NS).svc.cluster.local/mcp
+
+csp-knowledge-image:
+	@test -f $(CSP_KNOWLEDGE_SRC)/Dockerfile || { echo "c-kg not found: set CSP_KNOWLEDGE_SRC (now $(CSP_KNOWLEDGE_SRC))"; exit 1; }
+	docker build --build-arg HTTP_PROXY --build-arg HTTPS_PROXY --build-arg NO_PROXY -t $(CSP_KNOWLEDGE_IMAGE) $(CSP_KNOWLEDGE_SRC)
+	kind load docker-image $(CSP_KNOWLEDGE_IMAGE) --name $(CLUSTER_NAME)
+
+# Order: the key file must be in the gateway pod before a config that names it is loaded (a gateway that read the config
+# first does not retry the missing file). So the Secret and the target are written first and then, only if either
+# changed, the gateway is restarted (rolling: the old pod serves until the new one is ready). If the check through the
+# gateway then fails, the target is removed again: with the default failureMode one broken target fails every MCP call.
+csp-knowledge-sample: csp-knowledge-image
+	@kubectl -n $(AGENTGATEWAY_NS) get configmap agentgateway-config >/dev/null 2>&1 || { echo "agentgateway not deployed: run 'make agentgateway' first"; exit 1; }
+	@kubectl -n $(CSP_KNOWLEDGE_NS) get secret $(CSP_KNOWLEDGE_KEY) >/dev/null 2>&1 || \
+	  kubectl -n $(CSP_KNOWLEDGE_NS) create secret generic $(CSP_KNOWLEDGE_KEY) \
+	    --from-literal=api-key="$$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')" >/dev/null
+	@mkdir -p .rendered
+	@CSP_KNOWLEDGE_IMAGE_ID=$$(docker image inspect -f '{{.Id}}' $(CSP_KNOWLEDGE_IMAGE)) \
+	  envsubst '$${CSP_KNOWLEDGE_NS} $${CSP_KNOWLEDGE_IMAGE} $${CSP_KNOWLEDGE_BASE_IRI} $${CSP_KNOWLEDGE_IMAGE_ID}' \
+	  < manifests/csp-knowledge.yaml.tpl > $(CSP_KNOWLEDGE_RENDERED)
+	kubectl apply -f $(CSP_KNOWLEDGE_RENDERED)
+	kubectl -n $(CSP_KNOWLEDGE_NS) rollout status deploy/csp-knowledge --timeout=5m
+	@key=$$(kubectl -n $(CSP_KNOWLEDGE_NS) get secret $(CSP_KNOWLEDGE_KEY) -o jsonpath='{.data.api-key}'); \
+	cur=$$(kubectl -n $(AGENTGATEWAY_NS) get secret agentgateway-llm-keys -o jsonpath='{.data.$(CSP_KNOWLEDGE_KEY)}'); \
+	changed=; \
+	if [ "$$key" != "$$cur" ]; then \
+	  kubectl -n $(AGENTGATEWAY_NS) patch secret agentgateway-llm-keys --type merge -p "{\"data\":{\"$(CSP_KNOWLEDGE_KEY)\":\"$$key\"}}" >/dev/null || exit 1; \
+	  echo "agentgateway-llm-keys: $(CSP_KNOWLEDGE_KEY) set"; changed=1; fi; \
+	r=$$(python3 scripts/agentgateway-mcp-target.py $(AGENTGATEWAY_NS) add $(CSP_KNOWLEDGE_TARGET) \
+	  http://csp-knowledge.$(CSP_KNOWLEDGE_NS).svc.cluster.local:8000/mcp /llm-keys/$(CSP_KNOWLEDGE_KEY)) || exit 1; \
+	echo "agentgateway MCP target $(CSP_KNOWLEDGE_TARGET): $$r"; [ "$$r" = changed ] && changed=1; \
+	if [ -n "$$changed" ]; then \
+	  kubectl -n $(AGENTGATEWAY_NS) rollout restart deploy/$(AGW_RELEASE) && \
+	  kubectl -n $(AGENTGATEWAY_NS) rollout status deploy/$(AGW_RELEASE) --timeout=3m || exit 1; fi
+	@$(MAKE) --no-print-directory csp-knowledge-verify || { \
+	  echo "csp-knowledge does not work through the gateway: removing the target so the other MCP servers keep working"; \
+	  python3 scripts/agentgateway-mcp-target.py $(AGENTGATEWAY_NS) remove $(CSP_KNOWLEDGE_TARGET); exit 1; }
+	@echo "MCP on the gateway: $(AGW_MCP_URL) (tools csp-knowledge_*); direct: http://csp-knowledge.$(CSP_KNOWLEDGE_NS).svc.cluster.local:8000/mcp with the key in Secret $(CSP_KNOWLEDGE_KEY)"
+
+# Through the gateway, from the c-kg pod (the gateway image has no shell): the csp-knowledge tools are listed, graph_stats
+# answers, and the chart's test-mcp target is still listed (only checked while it is configured).
+csp-knowledge-verify:
+	@others=$$(kubectl -n $(AGENTGATEWAY_NS) get configmap agentgateway-config -o jsonpath='{.data.config\.yaml}' | grep -q 'name: test-mcp$$' && echo test-mcp); \
+	kubectl -n $(CSP_KNOWLEDGE_NS) exec -i deploy/csp-knowledge -c c-kg -- python3 - $(AGW_MCP_URL) $(CSP_KNOWLEDGE_TARGET) graph_stats $$others \
+	  < scripts/agentgateway-mcp-verify.py
+
+# Target, key, workload and data (the PVC). The gateway is restarted only if its config changed. The image stays in kind.
+csp-knowledge-clean:
+	@if kubectl -n $(AGENTGATEWAY_NS) get configmap agentgateway-config >/dev/null 2>&1; then \
+	  r=$$(python3 scripts/agentgateway-mcp-target.py $(AGENTGATEWAY_NS) remove $(CSP_KNOWLEDGE_TARGET)) || exit 1; \
+	  echo "agentgateway MCP target $(CSP_KNOWLEDGE_TARGET): $$r"; \
+	  kubectl -n $(AGENTGATEWAY_NS) patch secret agentgateway-llm-keys --type json \
+	    -p '[{"op":"remove","path":"/data/$(CSP_KNOWLEDGE_KEY)"}]' >/dev/null 2>&1 && echo "agentgateway-llm-keys: $(CSP_KNOWLEDGE_KEY) removed"; \
+	  if [ "$$r" = changed ]; then kubectl -n $(AGENTGATEWAY_NS) rollout restart deploy/$(AGW_RELEASE) && \
+	    kubectl -n $(AGENTGATEWAY_NS) rollout status deploy/$(AGW_RELEASE) --timeout=3m; fi; fi
+	kubectl -n $(CSP_KNOWLEDGE_NS) delete deploy/csp-knowledge svc/csp-knowledge \
+	  secret/$(CSP_KNOWLEDGE_KEY) pvc/csp-knowledge-data --ignore-not-found
 
 # Remove everything the openan-* targets created in the cluster, so a new OpenAN deployment can start from scratch. Order
 # matters: the operator must still run while the sample card and the OpenAN CR are deleted (its finalizers remove the

@@ -248,6 +248,7 @@ make k8s-dashboard           # official Kubernetes Dashboard (chart 7.14.0) + re
 make bootstrap-openan        # openan-operator-image, openan-operator, openan-sample, agentgateway, openan-portal-route, k8s-dashboard,
                              # openan-port-forward, k8s-dashboard-port-forward
 make openan-clean            # remove everything the openan-* targets, agentgateway and k8s-dashboard created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
+make csp-knowledge-sample    # optional, after agentgateway: c-kg knowledge-graph MCP server, registered in agentgateway (see below)
 ```
 
 **AI gateway.** `make agentgateway` installs the Canvas [agentgateway](https://github.com/agentgateway/agentgateway) chart as
@@ -460,3 +461,55 @@ role until they expire. Check what the account may do with
   the release and the `kubernetes-dashboard` namespace. `make openan-clean` runs it too.
 - Earlier versions of `make k8s-dashboard` created a `cluster-admin` account named `dashboard-admin`; `make k8s-dashboard`
   deletes it.
+
+### CSP knowledge sample (c-kg MCP server behind agentgateway)
+
+`make csp-knowledge-sample` deploys c-kg (`CSP_KNOWLEDGE_SRC`, a knowledge graph with an autonomous-networks
+ontology, served as an MCP server) next to the AI gateway and registers it there as an MCP target. It needs
+`make agentgateway` (or `make bootstrap-openan`) first and is not part of either bootstrap.
+
+```bash
+make csp-knowledge-sample    # build c-kg from CSP_KNOWLEDGE_SRC, kind load, deploy, register in agentgateway, check through it
+make csp-knowledge-verify    # the check alone
+make csp-knowledge-clean     # target, key, Deployment, Service, Secret and PVC (the graph data)
+```
+
+What it does:
+
+1. **Image.** `docker build` of `CSP_KNOWLEDGE_SRC` (default `../../../knowledge/c-kg`, its working tree as it is) as
+   `CSP_KNOWLEDGE_IMAGE` (`c-kg:sample`), then `kind load`. The pod template carries the image ID, so a rebuild rolls the pod.
+2. **Workload** (`manifests/csp-knowledge.yaml.tpl`, adapted from c-kg's `deploy/k8s/c-kg.yaml`) in `CSP_KNOWLEDGE_NS`
+   (default: the agentgateway namespace, `canvas`, which has no Istio sidecar): Deployment `csp-knowledge` (1 replica,
+   `Recreate`, TCP probes), Service `csp-knowledge:8000` (`/mcp`, Streamable HTTP), PVC `csp-knowledge-data` for
+   `kg_data.ttl`. `C_KG_BASE_IRI` is pinned to `CSP_KNOWLEDGE_BASE_IRI` (`http://c-kg.net`).
+3. **Key.** c-kg runs open without a key, so a random one is generated once into Secret `csp-knowledge-api-key` (kept
+   across re-runs) and copied to `agentgateway-llm-keys` as `csp-knowledge-api-key`. The gateway reads it as
+   `/llm-keys/csp-knowledge-api-key`, as for tokens entered on the portal.
+4. **Registration** (`scripts/agentgateway-mcp-target.py`): the entry
+   `{name: csp-knowledge, mcp: {host: http://csp-knowledge.canvas.svc.cluster.local:8000/mcp}, policies: {backendAuth: {key: {file: /llm-keys/csp-knowledge-api-key}}}}`
+   is added to `mcp.targets` in the live `agentgateway-config` ConfigMap. If the key or the entry changed, the gateway
+   Deployment is restarted (rolling), because a gateway that loads a config before its key file exists does not pick the
+   file up later. A re-run with nothing changed does not touch the gateway.
+5. **Check** (`scripts/agentgateway-mcp-verify.py`, run in the c-kg pod because the gateway image has no shell): MCP
+   `initialize` and `tools/list` on `http://agentgateway.canvas.svc.cluster.local/mcp` must list the c-kg tools (29, named
+   `csp-knowledge_<tool>`) and still the `test-mcp` ones, and `csp-knowledge_graph_stats` must answer. If it fails, the
+   target is removed again: with agentgateway's default `failureMode`, one unreachable target fails **every** MCP request
+   through the gateway.
+
+Use it from any MCP client in the cluster on the gateway's `/mcp` (no client authentication), or directly on
+`http://csp-knowledge.canvas.svc.cluster.local:8000/mcp` with `Authorization: Bearer <key>` (`kubectl -n canvas get secret
+csp-knowledge-api-key -o jsonpath='{.data.api-key}' | base64 -d`; `canvas` is the default `CSP_KNOWLEDGE_NS`). The Canvas Portal's AI Gateways page reads the same config,
+so it should list the target (not checked). To try it with data, call `csp-knowledge_load_graph` with `path=/app/ontologies/an/an_examples.ttl`.
+
+Notes:
+
+- **Host header.** c-kg compares the `Host` header literally, port included, and answers 421 otherwise; agentgateway sends
+  it without the port. The Deployment therefore allows both forms of every Service name (`C_KG_ALLOWED_HOSTS`).
+- **Access.** The gateway's traffic port has no client authentication, so any pod that can reach it uses c-kg with the
+  gateway's key, including its write tools (`add_triple`, `delete_entity`, and `save_graph`/`load_graph`, which take
+  filesystem paths inside the c-kg container). Demo only.
+- **Persistence.** The data graph is written to the PVC only on a graceful shutdown (SIGTERM); imported BPMN workflows are
+  never persisted (c-kg's `docs/deployment.md`).
+- **Gateway re-installs.** `make agentgateway` keeps the live MCP targets, so the registration survives it. `make
+  openan-clean` uninstalls the gateway, and a fresh install has only the chart's targets: run `make csp-knowledge-sample`
+  again after `make bootstrap-openan`.
