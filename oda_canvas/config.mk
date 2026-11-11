@@ -142,5 +142,9 @@ TEST_MCP_SERVER_IMAGE=tmforumodacanvas/test-mcp-server:0.1.0
 CSP_KNOWLEDGE_SRC=../../../knowledge/c-kg
 CSP_KNOWLEDGE_IMAGE=c-kg:sample
 CSP_KNOWLEDGE_NS=$(AGENTGATEWAY_NS)
+# c-kg tools reachable through agentgateway (comma separated; empty: all 29). The gateway's MCP port has no client
+# authentication, so by default only the read-only ones: no add/update/delete, load/save (file paths), ontology,
+# agent, BPMN or reasoning changes.
+CSP_KNOWLEDGE_ALLOWED_TOOLS=sparql_query,get_entity,list_classes,list_instances,get_class_schema,list_ontologies,graph_stats,validate,get_subgraph,get_path,find_workflows,get_workflow_steps,list_agents,get_workflow_executions
 # RDF base of the graph's named graphs and instance IRIs (C_KG_BASE_IRI): keep it fixed once data exists.
 CSP_KNOWLEDGE_BASE_IRI=http://c-kg.net

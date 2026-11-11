@@ -528,7 +528,8 @@ csp-knowledge-sample: csp-knowledge-image
 	  kubectl -n $(AGENTGATEWAY_NS) patch secret agentgateway-llm-keys --type merge -p "{\"data\":{\"$(CSP_KNOWLEDGE_KEY)\":\"$$key\"}}" >/dev/null || exit 1; \
 	  echo "agentgateway-llm-keys: $(CSP_KNOWLEDGE_KEY) set"; changed=1; fi; \
 	r=$$(python3 scripts/agentgateway-mcp-target.py $(AGENTGATEWAY_NS) add $(CSP_KNOWLEDGE_TARGET) \
-	  http://csp-knowledge.$(CSP_KNOWLEDGE_NS).svc.cluster.local:8000/mcp /llm-keys/$(CSP_KNOWLEDGE_KEY)) || exit 1; \
+	  http://csp-knowledge.$(CSP_KNOWLEDGE_NS).svc.cluster.local:8000/mcp --key-file /llm-keys/$(CSP_KNOWLEDGE_KEY) \
+	  --allow-tools '$(CSP_KNOWLEDGE_ALLOWED_TOOLS)') || exit 1; \
 	echo "agentgateway MCP target $(CSP_KNOWLEDGE_TARGET): $$r"; [ "$$r" = changed ] && changed=1; \
 	if [ -n "$$changed" ]; then \
 	  kubectl -n $(AGENTGATEWAY_NS) rollout restart deploy/$(AGW_RELEASE) && \
@@ -539,10 +540,12 @@ csp-knowledge-sample: csp-knowledge-image
 	@echo "MCP on the gateway: $(AGW_MCP_URL) (tools csp-knowledge_*); direct: http://csp-knowledge.$(CSP_KNOWLEDGE_NS).svc.cluster.local:8000/mcp with the key in Secret $(CSP_KNOWLEDGE_KEY)"
 
 # Through the gateway, from the c-kg pod (the gateway image has no shell): the csp-knowledge tools are listed, graph_stats
-# answers, and the chart's test-mcp target is still listed (only checked while it is configured).
+# answers, the chart's test-mcp target is still listed (only checked while it is configured) and, with
+# CSP_KNOWLEDGE_ALLOWED_TOOLS, a write tool (delete_entity) is neither listed nor callable.
 csp-knowledge-verify:
 	@others=$$(kubectl -n $(AGENTGATEWAY_NS) get configmap agentgateway-config -o jsonpath='{.data.config\.yaml}' | grep -q 'name: test-mcp$$' && echo test-mcp); \
 	kubectl -n $(CSP_KNOWLEDGE_NS) exec -i deploy/csp-knowledge -c c-kg -- python3 - $(AGW_MCP_URL) $(CSP_KNOWLEDGE_TARGET) graph_stats $$others \
+	  $(if $(filter delete_entity,$(subst $(comma), ,$(CSP_KNOWLEDGE_ALLOWED_TOOLS))),,$(if $(CSP_KNOWLEDGE_ALLOWED_TOOLS),!delete_entity)) \
 	  < scripts/agentgateway-mcp-verify.py
 
 # Target, key, workload and data (the PVC). The gateway is restarted only if its config changed. The image stays in kind.

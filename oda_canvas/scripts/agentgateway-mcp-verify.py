@@ -1,17 +1,26 @@
 """Check one MCP target through agentgateway: list the tools on the gateway's /mcp and call one of the target's.
 
 Runs inside a pod with python3 and no extra packages (the gateway image has no shell):
-  kubectl exec -i <pod> -- python3 - <gateway mcp url> <target name> <tool> [<other target>...] < agentgateway-mcp-verify.py
+  kubectl exec -i <pod> -- python3 - <gateway mcp url> <target name> <tool> [<other target>|!<tool>...] < agentgateway-mcp-verify.py
 
 The tool is called with no arguments. Each <other target> must still have tools listed: with agentgateway's default
-failureMode, one unreachable target fails every MCP request through the gateway. Retries for about a minute.
+failureMode, one unreachable target fails every MCP request through the gateway. Each !<tool> of the target must be
+hidden by the gateway's authorization: not listed, and a call (no arguments) refused by the gateway before it reaches the server
+(HTTP 400 with a JSON-RPC error, "unknown resource": the gateway treats it as not existing). Retries for about a minute.
 """
 import json
 import sys
 import time
+import urllib.error
 import urllib.request
 
-url, target, tool, *others = sys.argv[1:]
+url, target, tool, *rest = sys.argv[1:]
+others = [r for r in rest if not r.startswith("!")]
+hidden = [r[1:] for r in rest if r.startswith("!")]
+
+
+class RpcError(Exception):
+    pass
 
 
 def post(body, session=None):
@@ -30,7 +39,7 @@ def post(body, session=None):
             msg = json.loads(data)
             if msg.get("id") == body["id"]:
                 if "error" in msg:
-                    raise RuntimeError(msg["error"])
+                    raise RpcError(msg["error"])
                 return msg["result"], session
     raise RuntimeError(f"no response to {body['method']}: {text[:300]}")
 
@@ -45,6 +54,24 @@ def check():
     missing = [o for o in others if not any(n.startswith(f"{o}_") for n in names)]
     if not mine or missing:
         raise RuntimeError(f"{len(mine)} {target} tools, missing targets {missing}; listed: {names}")
+    listed = [h for h in hidden if f"{target}_{h}" in names]
+    if listed:
+        raise RuntimeError(f"listed although not allowed: {listed}")
+    for h in hidden:
+        try:
+            result, _ = post({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                              "params": {"name": f"{target}_{h}", "arguments": {}}}, session)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            try:
+                error = json.loads(body).get("error")
+            except ValueError:
+                error = None
+            if exc.code == 400 and error:
+                print(f"{target}_{h}: refused by the gateway ({error.get('message')})")
+                continue
+            raise
+        raise RuntimeError(f"{target}_{h} reached the server although not allowed: {result}")
     result, _ = post({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                       "params": {"name": f"{target}_{tool}", "arguments": {}}}, session)
     if result.get("isError"):

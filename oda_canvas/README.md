@@ -487,29 +487,45 @@ What it does:
    `/llm-keys/csp-knowledge-api-key`, as for tokens entered on the portal.
 4. **Registration** (`scripts/agentgateway-mcp-target.py`): the entry
    `{name: csp-knowledge, mcp: {host: http://csp-knowledge.canvas.svc.cluster.local:8000/mcp}, policies: {backendAuth: {key: {file: /llm-keys/csp-knowledge-api-key}}}}`
-   is added to `mcp.targets` in the live `agentgateway-config` ConfigMap. If the key or the entry changed, the gateway
+   is added to `mcp.targets` in the live `agentgateway-config` ConfigMap, with the tool restriction below. If the key,
+   the entry or the restriction changed, the gateway
    Deployment is restarted (rolling), because a gateway that loads a config before its key file exists does not pick the
    file up later. A re-run with nothing changed does not touch the gateway.
 5. **Check** (`scripts/agentgateway-mcp-verify.py`, run in the c-kg pod because the gateway image has no shell): MCP
-   `initialize` and `tools/list` on `http://agentgateway.canvas.svc.cluster.local/mcp` must list the c-kg tools (29, named
-   `csp-knowledge_<tool>`) and still the `test-mcp` ones, and `csp-knowledge_graph_stats` must answer. If it fails, the
+   `initialize` and `tools/list` on `http://agentgateway.canvas.svc.cluster.local/mcp` must list the allowed c-kg tools
+   (named `csp-knowledge_<tool>`) and still the `test-mcp` ones, `csp-knowledge_delete_entity` must be neither listed nor
+   callable, and `csp-knowledge_graph_stats` must answer. If it fails, the
    target is removed again: with agentgateway's default `failureMode`, one unreachable target fails **every** MCP request
    through the gateway.
 
-Use it from any MCP client in the cluster on the gateway's `/mcp` (no client authentication), or directly on
+**Read-only through the gateway.** The gateway's traffic port has no client authentication: any pod that reaches it uses
+c-kg with the gateway's key. So only the tools in `CSP_KNOWLEDGE_ALLOWED_TOOLS` (`config.mk`) go through, by default the 14
+read-only ones (`sparql_query`, which refuses SPARQL Update, `get_entity`, `list_classes`, `list_instances`,
+`get_class_schema`, `list_ontologies`, `graph_stats`, `validate`, `get_subgraph`, `get_path`, `find_workflows`,
+`get_workflow_steps`, `list_agents`, `get_workflow_executions`). The others (add/update/delete, `load_graph`/`save_graph`
+with their file paths, ontology, agent, BPMN and reasoning changes) are not listed, and a call gets HTTP 400 with the
+JSON-RPC error `unknown resource`. `CSP_KNOWLEDGE_ALLOWED_TOOLS=` (empty) lets all 29 through.
+
+agentgateway v1.7.0 has no per-target tool filter: the restriction is `mcp.policies.mcpAuthorization`, whose rules apply to
+every target, are OR'ed, and deny everything they do not allow once one exists. The script therefore writes one rule per
+kind (tool, prompt, resource, task) allowing every other target, plus one allowing the listed `csp-knowledge` tools, and
+refuses to add them next to rules it did not write (OR'ed rules could not restrict a second target separately).
+`make agentgateway` keeps these rules with the targets (`scripts/agentgateway-live-values.py`).
+
+Use the read-only tools from any MCP client in the cluster on the gateway's `/mcp`. Everything, writes included, is on
 `http://csp-knowledge.canvas.svc.cluster.local:8000/mcp` with `Authorization: Bearer <key>` (`kubectl -n canvas get secret
-csp-knowledge-api-key -o jsonpath='{.data.api-key}' | base64 -d`; `canvas` is the default `CSP_KNOWLEDGE_NS`). The Canvas Portal's AI Gateways page reads the same config,
-so it should list the target (not checked). To try it with data, call `csp-knowledge_load_graph` with `path=/app/ontologies/an/an_examples.ttl`.
+csp-knowledge-api-key -o jsonpath='{.data.api-key}' | base64 -d`; `canvas` is the default `CSP_KNOWLEDGE_NS`), for example
+`load_graph` with `path=/app/ontologies/an/an_examples.ttl` for sample data. The Canvas Portal's AI Gateways page reads the
+same config, so it should list the target (not checked).
 
 Notes:
 
 - **Host header.** c-kg compares the `Host` header literally, port included, and answers 421 otherwise; agentgateway sends
   it without the port. The Deployment therefore allows both forms of every Service name (`C_KG_ALLOWED_HOSTS`).
-- **Access.** The gateway's traffic port has no client authentication, so any pod that can reach it uses c-kg with the
-  gateway's key, including its write tools (`add_triple`, `delete_entity`, and `save_graph`/`load_graph`, which take
-  filesystem paths inside the c-kg container). Demo only.
+- **Residual access.** The read-only tools still answer anyone who reaches the gateway, and c-kg's `sparql_query` does not
+  refuse `SERVICE`, with which rdflib fetches remote SPARQL endpoints from the c-kg pod. Demo only.
 - **Persistence.** The data graph is written to the PVC only on a graceful shutdown (SIGTERM); imported BPMN workflows are
   never persisted (c-kg's `docs/deployment.md`).
-- **Gateway re-installs.** `make agentgateway` keeps the live MCP targets, so the registration survives it. `make
+- **Gateway re-installs.** `make agentgateway` keeps the live MCP targets and policies, so the registration survives it. `make
   openan-clean` uninstalls the gateway, and a fresh install has only the chart's targets: run `make csp-knowledge-sample`
   again after `make bootstrap-openan`.
