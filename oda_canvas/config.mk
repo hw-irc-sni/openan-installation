@@ -135,7 +135,7 @@ AGENTGATEWAY_SRC=../../../tmforum-oda/oda-canvas-merged-demo
 AGENTGATEWAY_NS=$(CANVAS_NS)
 # Must match charts/agentgateway/values.yaml (agentgateway-standalone.image and testMcpServer.image).
 AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway:v1.7.0
-TEST_MCP_SERVER_IMAGE=tmforumodacanvas/test-mcp-server:0.1.0
+TEST_MCP_SERVER_IMAGE=tmforumodacanvas/test-mcp-server:0.1.1
 
 # CSP knowledge sample (`make csp-knowledge-sample`, not part of the bootstraps): the c-kg knowledge-graph MCP server, built
 # from CSP_KNOWLEDGE_SRC and loaded into kind, deployed next to agentgateway and registered there as MCP target csp-knowledge.
