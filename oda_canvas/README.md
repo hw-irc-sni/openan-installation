@@ -80,6 +80,7 @@ make oda-canvas-port-forward  # all UIs on every host IP (FORWARD_ADDRESS=0.0.0.
                               # Prometheus :9090, Jaeger :16686, Langfuse :3002, ExposedAPIs :80/:443 (detached: systemd user services, survive a closed
                               # terminal and auto-restart; `make oda-canvas-port-forward-stop`; already the last step of bootstrap-oda-canvas)
 make openan-port-forward      # OpenAN portal :8082, same detached mode, independent of the above (`make openan-port-forward-stop`)
+make k8s-dashboard-port-forward  # Kubernetes Dashboard https :8444, same detached mode (`make k8s-dashboard-port-forward-stop`)
 make status
 make down                     # delete the cluster
 ```
@@ -242,9 +243,11 @@ make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orch
 make openan-sample           # Sample-A2A-T-Agent: builds its image (sample-agent/), loads it into kind, deploys it; waits until its card is in the Registry
 make agentgateway            # AI gateway (charts/agentgateway from AGENTGATEWAY_SRC): pulls/builds and loads its images, installs it in canvas
 make openan-portal-route     # portal on the Istio gateway at "/" (last: it is a catch-all route)
+make k8s-dashboard           # official Kubernetes Dashboard (chart 7.14.0) + cluster-admin login account; `make k8s-dashboard-token` issues a 1h token
 # or all of it in the right order, on top of a running Canvas:
-make bootstrap-openan        # openan-operator-image, openan-operator, openan-sample, agentgateway, openan-portal-route, openan-port-forward
-make openan-clean            # remove everything the openan-* targets and agentgateway created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
+make bootstrap-openan        # openan-operator-image, openan-operator, openan-sample, agentgateway, openan-portal-route, k8s-dashboard,
+                             # openan-port-forward, k8s-dashboard-port-forward
+make openan-clean            # remove everything the openan-* targets, agentgateway and k8s-dashboard created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
 ```
 
 **AI gateway.** `make agentgateway` installs the Canvas [agentgateway](https://github.com/agentgateway/agentgateway) chart as
@@ -260,6 +263,14 @@ the gateway, and a new gateway install generates a new key, so `make agentgatewa
 `helm upgrade --reset-then-reuse-values` (other portal values are kept). It only does so if the portal release runs the chart
 version in `PORTAL_SRC`; otherwise it prints the command. These settings need canvas-portal chart 0.1.3 or later, which is why
 `PORTAL_SRC` defaults to the `oda-canvas-merged-demo` checkout.
+
+**Kubernetes Dashboard.** `make k8s-dashboard` (part of `make bootstrap-openan`) installs the official
+[Kubernetes Dashboard](https://github.com/kubernetes-retired/dashboard) in namespace `kubernetes-dashboard`. The project is
+archived and its Helm repository returns 404, so the chart comes from the tarball of its last GitHub release
+(`K8S_DASHBOARD_CHART_VERSION=7.14.0`, `config.mk`); its images are pulled by Docker and loaded into kind. It also creates the
+`dashboard-admin` ServiceAccount bound to `cluster-admin` (`manifests/k8s-dashboard-admin.yaml`): demo only. It has no
+long-lived token: `make k8s-dashboard-token` issues one valid for `K8S_DASHBOARD_TOKEN_DURATION` (1h). Open
+`https://<host>:8444/` (`K8S_DASHBOARD_LOCAL_PORT`, self-signed certificate) and log in with that token. `make k8s-dashboard-clean` (also run by `make openan-clean`) removes it.
 
 **Registry Center in the portal.** `portal-values.yaml.tpl` also sets `backend.registryCenter.url` to the OpenAN Registry
 Center (`openan-registry-center-registry-center.$OPENAN_NS:5000`), for the portal's AI Registries > Agents section. The Registry

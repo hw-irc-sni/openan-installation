@@ -40,7 +40,8 @@ INGRESS_KEY := $(shell echo '$(INGRESS_ADDRESS)' | grep -Eq '^[0-9.]+$$' && echo
         cluster repos deps istio ingress-address gateway-api-crds vault-prepare permissions \
         canvas oda-canvas canvas-verify images portal-realm portal verify component-sample component-verify \
         oda-canvas-port-forward oda-canvas-port-forward-stop openan-port-forward openan-port-forward-stop status down openan-operator-image openan-operator openan-sample-image openan-portal-route openan-sample openan-verify openan-clean bootstrap-openan openan-credentials \
-        agentgateway-image agentgateway
+        agentgateway-image agentgateway k8s-dashboard k8s-dashboard-token k8s-dashboard-port-forward \
+        k8s-dashboard-port-forward-stop k8s-dashboard-clean
 
 # The five stages one after the other (recursive make: the order must hold also under `make -j`).
 bootstrap-oda-canvas: check-secrets check-portal
@@ -438,6 +439,44 @@ agentgateway: agentgateway-image
 	fi
 	@echo "agentgateway: http://agentgateway.$(AGENTGATEWAY_NS).svc.cluster.local (/v1/chat/completions, /mcp, /agents/sample-agent)"
 
+# ---- Kubernetes Dashboard ----------------------------------------------------------------------------
+# The official dashboard (chart K8S_DASHBOARD_CHART_VERSION, from its GitHub release: the Helm repository is gone), with a
+# cluster-admin login account (manifests/k8s-dashboard-admin.yaml, namespace fixed there). Part of `make bootstrap-openan`.
+# The kind nodes cannot pull: the chart's images are pulled by the Docker daemon and loaded into kind.
+K8S_DASHBOARD_NS := kubernetes-dashboard
+K8S_DASHBOARD_TGZ := .rendered/kubernetes-dashboard-$(K8S_DASHBOARD_CHART_VERSION).tgz
+
+k8s-dashboard:
+	@mkdir -p .rendered
+	@test -s $(K8S_DASHBOARD_TGZ) || curl -fsSL -o $(K8S_DASHBOARD_TGZ) $(K8S_DASHBOARD_CHART_URL) \
+	  || { rm -f $(K8S_DASHBOARD_TGZ); echo "cannot download $(K8S_DASHBOARD_CHART_URL)"; exit 1; }
+	@helm template kubernetes-dashboard $(K8S_DASHBOARD_TGZ) -n $(K8S_DASHBOARD_NS) \
+	  | grep -hoE '^\s*-?\s*image:\s*"?[^"[:space:]]+' | sed -E 's/.*image:\s*"?//' | sort -u \
+	  | while read i; do docker image inspect $$i >/dev/null 2>&1 || docker pull -q $$i; kind load docker-image $$i --name $(CLUSTER_NAME); done
+	helm upgrade --install kubernetes-dashboard $(K8S_DASHBOARD_TGZ) -n $(K8S_DASHBOARD_NS) --create-namespace \
+	  $(HELM_FORCE) --wait --timeout 5m
+	kubectl apply -f manifests/k8s-dashboard-admin.yaml
+
+# A short-lived bearer token of the dashboard-admin account (K8S_DASHBOARD_TOKEN_DURATION), for the dashboard login page.
+k8s-dashboard-token:
+	@kubectl -n $(K8S_DASHBOARD_NS) get serviceaccount dashboard-admin >/dev/null 2>&1 || { echo "Kubernetes Dashboard not deployed: run 'make k8s-dashboard'"; exit 1; }
+	@kubectl -n $(K8S_DASHBOARD_NS) create token dashboard-admin --duration=$(K8S_DASHBOARD_TOKEN_DURATION)
+
+# Detached like the other forwards (scripts/port-forward.sh), own group: independent of the Canvas and OpenAN forwards.
+k8s-dashboard-port-forward:
+	@kubectl -n $(K8S_DASHBOARD_NS) get svc kubernetes-dashboard-kong-proxy >/dev/null 2>&1 || { echo "Kubernetes Dashboard not deployed: run 'make k8s-dashboard' first"; exit 1; }
+	@echo "Kubernetes Dashboard https://localhost:$(K8S_DASHBOARD_LOCAL_PORT)   (self-signed certificate; token: 'make k8s-dashboard-token')"
+	@$(PF) start dashboard $(PF_CTX) $(FORWARD_ADDRESS) $(K8S_DASHBOARD_NS)/kubernetes-dashboard-kong-proxy=$(K8S_DASHBOARD_LOCAL_PORT):443
+
+k8s-dashboard-port-forward-stop:
+	@$(PF) stop dashboard
+
+k8s-dashboard-clean:
+	-@$(PF) stop dashboard
+	kubectl delete -f manifests/k8s-dashboard-admin.yaml --ignore-not-found
+	helm uninstall kubernetes-dashboard -n $(K8S_DASHBOARD_NS) --ignore-not-found
+	kubectl delete namespace $(K8S_DASHBOARD_NS) --ignore-not-found
+
 # Remove everything the openan-* targets created in the cluster, so a new OpenAN deployment can start from scratch. Order
 # matters: the operator must still run while the sample card and the OpenAN CR are deleted (its finalizers remove the
 # Registry card, uninstall the Registry/Orchestration/portal releases and delete their data PVCs).
@@ -445,6 +484,7 @@ agentgateway: agentgateway-image
 #   2. the portal route                    6. the operator release and the OpenAN CRD
 #   3. the agentgateway release            7. leftovers by label, then the `openan` Helm repo (client side, if present)
 #   4. the sample agent Component
+#   8. the Kubernetes Dashboard (k8s-dashboard-clean: release, login account, namespace, forward)
 # Not touched: the Canvas, the namespaces (components and the operator's namespace are shared with the Canvas), the
 # `pc` reference component, and local Docker images / images already loaded into kind (not Kubernetes resources).
 # The agentgateway-llm-keys Secret (model API keys set from the portal) stays by design (helm.sh/resource-policy: keep). The
@@ -465,12 +505,13 @@ openan-clean:
 	kubectl -n $(OPENAN_NS) delete pvc -l 'app.kubernetes.io/instance in (openan-registry-center,openan-orchestration-center,openan-frontend)' --ignore-not-found
 	@if helm repo list 2>/dev/null | awk 'NR>1{print $$1}' | grep -qx '$(OPENAN_HELM_REPO)'; then \
 	  helm repo remove $(OPENAN_HELM_REPO); else echo "Helm repo $(OPENAN_HELM_REPO) not added"; fi
+	$(MAKE) k8s-dashboard-clean
 	@echo "OpenAN removed. Start again with: make bootstrap-openan"
 
 # The whole OpenAN start sequence, on top of a running Canvas (`make bootstrap-oda-canvas`). Order matters:
 #   images -> operator + OpenAN CR (Registry Center, Orchestration Center, portal) -> sample agent (waits for its card) ->
 #   agentgateway (routes to the sample agent) -> portal route LAST (a catch-all "/" on the Istio gateway must be the newest
-#   route) -> detached portal port-forward.
+#   route) -> Kubernetes Dashboard -> detached portal and dashboard port-forwards.
 # Undo with `make openan-clean`. The gateway route is reachable through `make oda-canvas-port-forward` (ingress ports).
 bootstrap-openan:
 	@kubectl get crd components.oda.tmforum.org >/dev/null 2>&1 && kubectl -n $(CANVAS_NS) get statefulset canvas-keycloak >/dev/null 2>&1 \
@@ -480,10 +521,12 @@ bootstrap-openan:
 	$(MAKE) openan-sample
 	$(MAKE) agentgateway
 	$(MAKE) openan-portal-route
-	@echo; echo "OpenAN ready: operator, Registry Center, Orchestration Center, portal, Sample-A2A-T-Agent and agentgateway."
+	$(MAKE) k8s-dashboard
+	@echo; echo "OpenAN ready: operator, Registry Center, Orchestration Center, portal, Sample-A2A-T-Agent, agentgateway and Kubernetes Dashboard."
 	@echo "Portal through the gateway: https://<host>:$(INGRESS_HTTPS_PORT)/ (needs 'make oda-canvas-port-forward'); direct forward below."
 	@echo "Login: admin / a NEW password after every recycle: run 'make openan-credentials'."
 	$(MAKE) openan-port-forward
+	$(MAKE) k8s-dashboard-port-forward
 
 # How to log in to the OpenAN portal. The admin password is generated by the operator when it creates the CR's
 # `openan-orchestration-runtime` Secret (create-once, owned by the CR) and the Orchestration Center seeds the account from it

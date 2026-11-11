@@ -73,6 +73,15 @@ GRAFANA_LOCAL_PORT=3001
 PROMETHEUS_LOCAL_PORT=9090
 LANGFUSE_LOCAL_PORT=3002
 OPENAN_PORTAL_LOCAL_PORT=8082
+# Kubernetes Dashboard (`make k8s-dashboard`, part of `make bootstrap-openan`), HTTPS with a self-signed certificate.
+K8S_DASHBOARD_LOCAL_PORT=8444
+# Validity of the login token from `make k8s-dashboard-token` (cluster-admin: keep it short).
+K8S_DASHBOARD_TOKEN_DURATION=1h
+
+# Kubernetes Dashboard chart. The project is archived (kubernetes-retired/dashboard) and its Helm repository is gone:
+# 7.14.0 is the last release, installed from the chart tarball of its GitHub release.
+K8S_DASHBOARD_CHART_VERSION=7.14.0
+K8S_DASHBOARD_CHART_URL=https://github.com/kubernetes-retired/dashboard/releases/download/kubernetes-dashboard-$(K8S_DASHBOARD_CHART_VERSION)/kubernetes-dashboard-$(K8S_DASHBOARD_CHART_VERSION).tgz
 
 # OpenAN operator (charts/openan-operator, operator/openan-operator) and the stack it manages.
 OPENAN_NS=components
