@@ -441,7 +441,8 @@ agentgateway: agentgateway-image
 
 # ---- Kubernetes Dashboard ----------------------------------------------------------------------------
 # The official dashboard (chart K8S_DASHBOARD_CHART_VERSION, from its GitHub release: the Helm repository is gone), with a
-# cluster-admin login account (manifests/k8s-dashboard-admin.yaml, namespace fixed there). Part of `make bootstrap-openan`.
+# login account bound to K8S_DASHBOARD_ROLE (manifests/k8s-dashboard-user.yaml.tpl, namespace fixed there). Part of
+# `make bootstrap-openan`. Switch the role with e.g. `make k8s-dashboard K8S_DASHBOARD_ROLE=cluster-admin` (and back with view).
 # The kind nodes cannot pull: the chart's images are pulled by the Docker daemon and loaded into kind.
 K8S_DASHBOARD_NS := kubernetes-dashboard
 K8S_DASHBOARD_TGZ := .rendered/kubernetes-dashboard-$(K8S_DASHBOARD_CHART_VERSION).tgz
@@ -455,12 +456,23 @@ k8s-dashboard:
 	  | while read i; do docker image inspect $$i >/dev/null 2>&1 || docker pull -q $$i; kind load docker-image $$i --name $(CLUSTER_NAME); done
 	helm upgrade --install kubernetes-dashboard $(K8S_DASHBOARD_TGZ) -n $(K8S_DASHBOARD_NS) --create-namespace \
 	  $(HELM_FORCE) --wait --timeout 5m
-	kubectl apply -f manifests/k8s-dashboard-admin.yaml
+	@kubectl get clusterrole $(K8S_DASHBOARD_ROLE) >/dev/null || { echo "K8S_DASHBOARD_ROLE: no ClusterRole $(K8S_DASHBOARD_ROLE) (use view or cluster-admin)"; exit 1; }
+	@# roleRef is immutable: a binding to another role must be deleted before the new one is applied.
+	@cur=$$(kubectl get clusterrolebinding dashboard-user -o jsonpath='{.roleRef.name}' 2>/dev/null); \
+	if [ -n "$$cur" ] && [ "$$cur" != "$(K8S_DASHBOARD_ROLE)" ]; then \
+	  echo "dashboard-user: $$cur -> $(K8S_DASHBOARD_ROLE)"; kubectl delete clusterrolebinding dashboard-user; fi
+	@# The first version of this target created a cluster-admin dashboard-admin account: remove it.
+	@kubectl delete clusterrolebinding dashboard-admin --ignore-not-found >/dev/null
+	@kubectl -n $(K8S_DASHBOARD_NS) delete serviceaccount dashboard-admin --ignore-not-found >/dev/null
+	@mkdir -p .rendered
+	@envsubst '$${K8S_DASHBOARD_ROLE}' < manifests/k8s-dashboard-user.yaml.tpl > .rendered/k8s-dashboard-user.yaml
+	kubectl apply -f .rendered/k8s-dashboard-user.yaml
+	@echo "Dashboard login account dashboard-user: ClusterRole $(K8S_DASHBOARD_ROLE)"
 
-# A short-lived bearer token of the dashboard-admin account (K8S_DASHBOARD_TOKEN_DURATION), for the dashboard login page.
+# A short-lived bearer token of the dashboard-user account (K8S_DASHBOARD_TOKEN_DURATION), for the dashboard login page.
 k8s-dashboard-token:
-	@kubectl -n $(K8S_DASHBOARD_NS) get serviceaccount dashboard-admin >/dev/null 2>&1 || { echo "Kubernetes Dashboard not deployed: run 'make k8s-dashboard'"; exit 1; }
-	@kubectl -n $(K8S_DASHBOARD_NS) create token dashboard-admin --duration=$(K8S_DASHBOARD_TOKEN_DURATION)
+	@kubectl -n $(K8S_DASHBOARD_NS) get serviceaccount dashboard-user >/dev/null 2>&1 || { echo "Kubernetes Dashboard not deployed: run 'make k8s-dashboard'"; exit 1; }
+	@kubectl -n $(K8S_DASHBOARD_NS) create token dashboard-user --duration=$(K8S_DASHBOARD_TOKEN_DURATION)
 
 # Detached like the other forwards (scripts/port-forward.sh), own group: independent of the Canvas and OpenAN forwards.
 k8s-dashboard-port-forward:
@@ -473,7 +485,7 @@ k8s-dashboard-port-forward-stop:
 
 k8s-dashboard-clean:
 	-@$(PF) stop dashboard
-	kubectl delete -f manifests/k8s-dashboard-admin.yaml --ignore-not-found
+	kubectl delete clusterrolebinding dashboard-user dashboard-admin --ignore-not-found
 	helm uninstall kubernetes-dashboard -n $(K8S_DASHBOARD_NS) --ignore-not-found
 	kubectl delete namespace $(K8S_DASHBOARD_NS) --ignore-not-found
 

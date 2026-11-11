@@ -75,7 +75,9 @@ LANGFUSE_LOCAL_PORT=3002
 OPENAN_PORTAL_LOCAL_PORT=8082
 # Kubernetes Dashboard (`make k8s-dashboard`, part of `make bootstrap-openan`), HTTPS with a self-signed certificate.
 K8S_DASHBOARD_LOCAL_PORT=8444
-# Validity of the login token from `make k8s-dashboard-token` (cluster-admin: keep it short).
+# ClusterRole of the dashboard login account: view (read-only) or cluster-admin (full control of the cluster).
+K8S_DASHBOARD_ROLE=view
+# Validity of the login token from `make k8s-dashboard-token` (keep it short, above all with cluster-admin).
 K8S_DASHBOARD_TOKEN_DURATION=1h
 
 # Kubernetes Dashboard chart. The project is archived (kubernetes-retired/dashboard) and its Helm repository is gone:

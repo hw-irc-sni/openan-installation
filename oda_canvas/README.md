@@ -243,7 +243,7 @@ make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orch
 make openan-sample           # Sample-A2A-T-Agent: builds its image (sample-agent/), loads it into kind, deploys it; waits until its card is in the Registry
 make agentgateway            # AI gateway (charts/agentgateway from AGENTGATEWAY_SRC): pulls/builds and loads its images, installs it in canvas
 make openan-portal-route     # portal on the Istio gateway at "/" (last: it is a catch-all route)
-make k8s-dashboard           # official Kubernetes Dashboard (chart 7.14.0) + cluster-admin login account; `make k8s-dashboard-token` issues a 1h token
+make k8s-dashboard           # official Kubernetes Dashboard (chart 7.14.0) + read-only login account; `make k8s-dashboard-token` issues a 1h token
 # or all of it in the right order, on top of a running Canvas:
 make bootstrap-openan        # openan-operator-image, openan-operator, openan-sample, agentgateway, openan-portal-route, k8s-dashboard,
                              # openan-port-forward, k8s-dashboard-port-forward
@@ -268,8 +268,9 @@ version in `PORTAL_SRC`; otherwise it prints the command. These settings need ca
 [Kubernetes Dashboard](https://github.com/kubernetes-retired/dashboard) in namespace `kubernetes-dashboard`. The project is
 archived and its Helm repository returns 404, so the chart comes from the tarball of its last GitHub release
 (`K8S_DASHBOARD_CHART_VERSION=7.14.0`, `config.mk`); its images are pulled by Docker and loaded into kind. It also creates the
-`dashboard-admin` ServiceAccount bound to `cluster-admin` (`manifests/k8s-dashboard-admin.yaml`): demo only. It has no
-long-lived token: `make k8s-dashboard-token` issues one valid for `K8S_DASHBOARD_TOKEN_DURATION` (1h). Open
+`dashboard-user` ServiceAccount (`manifests/k8s-dashboard-user.yaml.tpl`) bound to the ClusterRole `K8S_DASHBOARD_ROLE`:
+`view` (read-only) by default; `make k8s-dashboard K8S_DASHBOARD_ROLE=cluster-admin` gives it full control of the cluster
+(demo only; `make k8s-dashboard` without it goes back to `view`). It has no long-lived token: `make k8s-dashboard-token` issues one valid for `K8S_DASHBOARD_TOKEN_DURATION` (1h). Open
 `https://<host>:8444/` (`K8S_DASHBOARD_LOCAL_PORT`, self-signed certificate) and log in with that token. `make k8s-dashboard-clean` (also run by `make openan-clean`) removes it.
 
 **Registry Center in the portal.** `portal-values.yaml.tpl` also sets `backend.registryCenter.url` to the OpenAN Registry
