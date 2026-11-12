@@ -19,6 +19,7 @@ Required values (the render fails without them):
 | `image.tag` | No usable default; see `docs/en/TRANSPORT_DEPLOYMENT.md` |
 | `runtimeSecret` | Secret with `INTEGRATION_TOKEN_HMAC_KEY` / `INTEGRATION_FINGERPRINT_KEY` (env) |
 | `credentialSecret` | Secret with `integration_credentials.conf` (static bearer tokens) |
+| `credentialsChecksum` | Set by the OpenAN operator to the hash of the credentials file; adds the pod annotation `checksum/credentials`, so the pod restarts when the file changes (it is mounted by `subPath`). Empty: no annotation |
 
 The Component is named `<release>-<component.name>` (default `<release>-registrycenter`). Keep `replicas: 1`: events
 and schedulers are process-local.

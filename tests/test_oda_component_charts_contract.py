@@ -361,3 +361,69 @@ def test_callback_ca_configmap_is_mounted_for_callback_tls():
 def test_callback_ca_file_cannot_be_overridden_by_extra_env():
     _, env = _rc({**BROADCAST, "registry.extraEnv.REGISTRY_BROADCAST_CALLBACK_CA_FILE": "/etc/ssl/evil.pem"})
     assert env["REGISTRY_BROADCAST_CALLBACK_CA_FILE"] == ""
+
+
+# ---- agent sync (operator/openan-operator/src/agent_sync*.py) -------------------------------------------------------
+
+def test_operator_role_grants_every_verb_the_agent_sync_uses():
+    seen = _seen(next(d for d in _operator_docs() if d["kind"] == "Role"))
+    needs = [("oda.tmforum.org", "components", v) for v in ("get", "list", "create", "patch", "delete")]
+    needs += [("oda.tmforum.org", "exposedapis", v) for v in ("get", "list")]
+    needs += [("", "secrets", v) for v in ("get", "create", "patch")]
+    # children are replaced as a whole (update), and a mirror's ConfigMap is deleted when it becomes a deployment
+    needs += [("", "configmaps", v) for v in ("get", "create", "update", "delete")]
+    needs += [("", "services", v) for v in ("get", "create", "update")]
+    needs += [("apps", "deployments", v) for v in ("get", "create", "update")]
+    needs += [("openan.dev", "openans", "list"), ("openan.dev", "openans/status", "patch")]
+    missing = [n for n in needs if n not in seen]
+    assert not missing, missing
+
+
+def test_agent_sync_settings_and_annotations_are_documented():
+    import re
+    src = ROOT / "operator" / "openan-operator" / "src"
+    readme = (ROOT / "operator" / "openan-operator" / "README.md").read_text()
+    chart_docs = (ROOT / "charts" / "openan-operator" / "README.md").read_text() + \
+        (ROOT / "charts" / "openan-operator" / "values.yaml").read_text()
+    env = set(re.findall(r'"(AGENT_[A-Z_]+)"', (src / "openan_operator.py").read_text()))
+    assert env, "no AGENT_* settings found"
+    for name in sorted(env):
+        assert name in readme, f"{name} missing from the operator README"
+        assert name in chart_docs, f"{name} missing from the operator chart README/values"
+    keys = set()
+    for module in ("agent_sync.py", "agent_sync_io.py", "agent_manifests.py"):
+        keys |= set(re.findall(r'"(openan\.dev/[a-z-]+)"', (src / module).read_text()))
+    assert keys, "no openan.dev/ keys found"
+    assert not [k for k in sorted(keys) if k not in readme], "annotations/labels missing from the operator README"
+
+
+def test_registry_center_credentials_checksum_restarts_the_pod_only_when_set():
+    def pod_annotations(settings=None):
+        docs = render("openan-registry-center", settings)
+        return next(d for d in docs if d["kind"] == "Deployment")["spec"]["template"]["metadata"]["annotations"]
+    assert "checksum/credentials" not in pod_annotations()
+    assert pod_annotations({"credentialsChecksum": "abc"})["checksum/credentials"] == "abc"
+
+
+def test_connected_registry_example_renders_with_its_documented_variable_list():
+    import re
+    tpl = (ROOT / "oda_canvas" / "manifests" / "openan" / "connected-registry.yaml.tpl").read_text()
+    listed = re.search(r"envsubst '([^']+)'", tpl).group(1).split()
+    names = [re.fullmatch(r"\$\{([A-Z_]+)\}", v).group(1) for v in listed]
+    used = set(re.findall(r"\$\{([A-Z_]+)\}", tpl.split("\napiVersion:", 1)[1])) - {"NGINX_LOCAL_RESOLVERS"}
+    assert used == set(names), (used, names)
+    values = {"CONNECTED_REGISTRY_NAME": "partner", "CONNECTED_REGISTRY_ORIGIN": "https://registry.partner.example",
+              "CONNECTED_REGISTRY_HOST": "registry.partner.example",
+              "OPENAN_AGENT_PROXY_IMAGE": "nginxinc/nginx-unprivileged:1.27-alpine"}
+    body = tpl
+    for name in names:
+        body = body.replace("${" + name + "}", values[name])
+    assert set(re.findall(r"\$\{([A-Z_]+)\}", body.split("\napiVersion:", 1)[1])) == {"NGINX_LOCAL_RESOLVERS"}
+    docs = [d for d in yaml.safe_load_all(body) if d]
+    assert [d["kind"] for d in docs] == ["ConfigMap", "Deployment", "Service", "Component"]
+    comp = docs[-1]
+    assert comp["spec"]["componentMetadata"]["id"] in ("TMFC012", "OPENAN-RC")
+    api = comp["spec"]["coreFunction"]["exposedAPIs"][0]
+    assert api["name"] == "agentregistry" and api["specification"][0]["url"].endswith("/registry-center.yaml")
+    assert api["implementation"] == docs[2]["metadata"]["name"] and api["port"] == docs[2]["spec"]["ports"][0]["port"]
+    assert all(d["metadata"]["labels"]["oda.tmforum.org/componentName"] == "partner" for d in docs)

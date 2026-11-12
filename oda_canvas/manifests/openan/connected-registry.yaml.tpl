@@ -3,11 +3,12 @@
 # (spec.agentSync.enabled on the OpenAN CR). The Canvas only marks an API ready from Service endpoints, so the
 # Component is backed by a small nginx reverse proxy to the external registry, not by an ExternalName Service.
 #
-# Render with an explicit variable list (nginx's own ${...} variables must stay):
+# Render with an explicit variable list (nginx's own ${...} variables must stay). CONNECTED_REGISTRY_ORIGIN is
+# scheme://host[:port] only, no path: nginx passes it to a variable proxy_pass, which would replace every request path.
 #   export CONNECTED_REGISTRY_NAME=partner-registry CONNECTED_REGISTRY_ORIGIN=https://registry.partner.example \
 #          CONNECTED_REGISTRY_HOST=registry.partner.example \
 #          OPENAN_AGENT_PROXY_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
-#   envsubst '$${CONNECTED_REGISTRY_NAME} $${CONNECTED_REGISTRY_ORIGIN} $${CONNECTED_REGISTRY_HOST} $${OPENAN_AGENT_PROXY_IMAGE}' \
+#   envsubst '${CONNECTED_REGISTRY_NAME} ${CONNECTED_REGISTRY_ORIGIN} ${CONNECTED_REGISTRY_HOST} ${OPENAN_AGENT_PROXY_IMAGE}' \
 #     < connected-registry.yaml.tpl | kubectl apply -f -
 #
 # Credentials (Bearer tokens issued by that registry): `token` is used for writes (deleting cards when a mirrored
@@ -70,7 +71,9 @@ spec:
         ports: [{containerPort: 8080}]
         readinessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10}
         volumeMounts: [{name: conf, mountPath: /etc/nginx/templates}]
-        securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
+        securityContext: {runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]},
+                          seccompProfile: {type: RuntimeDefault}}
+        resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 500m, memory: 256Mi}}
       volumes: [{name: conf, configMap: {name: ${CONNECTED_REGISTRY_NAME}}}]
 ---
 apiVersion: v1
@@ -107,6 +110,8 @@ spec:
     exposedAPIs:
     - name: agentregistry
       apiType: openapi
+      # Discovery matches the /registry-center.yaml suffix. The Canvas binds dependencies by exact URL and this one
+      # differs from the in-cluster Registry Center's, so nothing that depends on that one binds to this proxy.
       specification:
       - url: ${CONNECTED_REGISTRY_ORIGIN}/registry-center.yaml
       implementation: ${CONNECTED_REGISTRY_NAME}

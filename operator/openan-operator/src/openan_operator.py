@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import kopf
@@ -20,7 +20,7 @@ from .card_signer import public_jwk
 from .cards import ANNOTATION, OwnershipError, allowed_hosts, build_signed_card, card_owner, owner_ref, candidate_urls, decode_secret, fetch_card, is_a2a, trust_document
 from .card_mapper import CardError
 from .registry_client import RegistryClient, RegistryError
-from .registry_source import SourceUnavailable
+from .registry_source import SourceUnavailable, find_agent
 from .secrets_bootstrap import new_stack_secrets, with_sync_credential
 
 ODA, OPENAN = "oda.tmforum.org", "openan.dev"
@@ -62,8 +62,23 @@ def _apps() -> client.AppsV1Api:
 
 
 def _apis() -> agent_sync_io.Apis:
-    # resolved at call time, so tests that patch _core/_custom/_apps also patch the agent sync
-    return agent_sync_io.Apis(lambda: _core(), lambda: _custom(), lambda: _apps())
+    return agent_sync_io.Apis(_core(), _custom(), _apps())
+
+
+def _env_list(name: str, default: Tuple[str, ...] = ()) -> Tuple[str, ...]:
+    """Comma-separated operator setting; blanks dropped; `default` when empty."""
+    return tuple(v.strip() for v in os.environ.get(name, "").split(",") if v.strip()) or default
+
+
+def _openan_owner(owner: Dict[str, Any]) -> client.V1OwnerReference:
+    return client.V1OwnerReference(api_version=f"{OPENAN}/v1alpha1", kind="OpenAN", name=owner["metadata"]["name"],
+                                   uid=owner["metadata"]["uid"], block_owner_deletion=True)
+
+
+def _new_secret(name: str, namespace: str, owner: Dict[str, Any], string_data: Dict[str, str]) -> client.V1Secret:
+    return client.V1Secret(metadata=client.V1ObjectMeta(
+        name=name, namespace=namespace, labels={agent_sync.MANAGED_BY_KEY: agent_sync.MANAGED_BY_VALUE},
+        owner_references=[_openan_owner(owner)]), string_data=string_data)
 
 
 def ensure_secrets(name: str, namespace: str, owner: Dict[str, Any]) -> None:
@@ -71,24 +86,14 @@ def ensure_secrets(name: str, namespace: str, owner: Dict[str, Any]) -> None:
     generated = None
     for suffix in ("registry-runtime", "registry-credentials", "operator-token", "orchestration-runtime", "signing-key"):
         sname = stack.secret_name(name, suffix)
-        try:
-            existing = _core().read_namespaced_secret(sname, namespace)
+        existing = agent_sync_io.ignore_404(_core().read_namespaced_secret, sname, namespace)
+        if existing is not None:
             if not existing.metadata.owner_references:  # detached by an earlier retainData delete: re-adopt
-                _core().patch_namespaced_secret(sname, namespace, {"metadata": {"ownerReferences": [{
-                    "apiVersion": f"{OPENAN}/v1alpha1", "kind": "OpenAN", "name": owner["metadata"]["name"],
-                    "uid": owner["metadata"]["uid"], "blockOwnerDeletion": True}]}})
+                _core().patch_namespaced_secret(sname, namespace, {"metadata": {"ownerReferences": [
+                    client.ApiClient().sanitize_for_serialization(_openan_owner(owner))]}})
             continue
-        except client.ApiException as e:
-            if e.status != 404:
-                raise
         generated = generated or new_stack_secrets(f"{name}")
-        body = client.V1Secret(metadata=client.V1ObjectMeta(name=sname, namespace=namespace,
-                               labels={"app.kubernetes.io/managed-by": "openan-operator"}),
-                               string_data=generated[suffix])
-        body.metadata.owner_references = [client.V1OwnerReference(
-            api_version=f"{OPENAN}/v1alpha1", kind="OpenAN", name=owner["metadata"]["name"],
-            uid=owner["metadata"]["uid"], block_owner_deletion=True)]
-        _core().create_namespaced_secret(namespace, body)
+        _core().create_namespaced_secret(namespace, _new_secret(sname, namespace, owner, generated[suffix]))
 
 
 def ensure_sync_credential(name: str, namespace: str, owner: Dict[str, Any]) -> str:
@@ -98,20 +103,12 @@ def ensure_sync_credential(name: str, namespace: str, owner: Dict[str, Any]) -> 
     core = _core()
     cred_name, tok_name = stack.secret_name(name, "registry-credentials"), stack.secret_name(name, "sync-token")
     conf = decode_secret(core.read_namespaced_secret(cred_name, namespace).data, "integration_credentials.conf")
-    try:
-        token: Optional[str] = decode_secret(core.read_namespaced_secret(tok_name, namespace).data, "token")
-    except client.ApiException as e:
-        if e.status != 404:
-            raise
-        token = None
-    if token is None:
+    existing = agent_sync_io.ignore_404(core.read_namespaced_secret, tok_name, namespace)
+    if existing is not None:
+        token = decode_secret(existing.data, "token")
+    else:
         token = secrets.token_urlsafe(48)
-        body = client.V1Secret(metadata=client.V1ObjectMeta(
-            name=tok_name, namespace=namespace, labels={"app.kubernetes.io/managed-by": "openan-operator"},
-            owner_references=[client.V1OwnerReference(api_version=f"{OPENAN}/v1alpha1", kind="OpenAN",
-                              name=owner["metadata"]["name"], uid=owner["metadata"]["uid"], block_owner_deletion=True)]),
-            string_data={"token": token})
-        core.create_namespaced_secret(namespace, body)
+        core.create_namespaced_secret(namespace, _new_secret(tok_name, namespace, owner, {"token": token}))
     hmac_key = decode_secret(core.read_namespaced_secret(stack.secret_name(name, "registry-runtime"), namespace).data,
                              "INTEGRATION_TOKEN_HMAC_KEY")
     wanted = with_sync_credential(conf, token, hmac_key)  # identical to conf when the entry is already current
@@ -137,11 +134,10 @@ def component_ready(name: str, namespace: str) -> bool:
 def reconcile(spec, name, namespace, body, patch, logger, **_):
     conds, comps = [], {}
     prior_ready = True
-    prefixes = tuple(p for p in os.environ.get("ALLOWED_IMAGE_PREFIXES", "").split(",") if p) or stack.DEFAULT_IMAGE_PREFIXES
-    spec_prefixes = (tuple(p for p in os.environ.get("ALLOWED_SPEC_URL_PREFIXES", "").split(",") if p)
-                     or stack.DEFAULT_SPEC_URL_PREFIXES)
-    callback_hosts = tuple(h.strip() for h in os.environ.get("ALLOWED_CALLBACK_HOSTS", "").split(",") if h.strip())
-    callback_cas = tuple(c.strip() for c in os.environ.get("ALLOWED_CALLBACK_CA_CONFIGMAPS", "").split(",") if c.strip())
+    prefixes = _env_list("ALLOWED_IMAGE_PREFIXES", stack.DEFAULT_IMAGE_PREFIXES)
+    spec_prefixes = _env_list("ALLOWED_SPEC_URL_PREFIXES", stack.DEFAULT_SPEC_URL_PREFIXES)
+    callback_hosts = _env_list("ALLOWED_CALLBACK_HOSTS")
+    callback_cas = _env_list("ALLOWED_CALLBACK_CA_CONFIGMAPS")
     try:  # reject the whole CR up front, before anything is installed
         for comp in stack.enabled_components(spec):
             stack.validate_values(comp, spec.get(comp, {}).get("values", {}), prefixes,
@@ -281,69 +277,50 @@ def _agent_sync_cr(namespace: str) -> Optional[Dict[str, Any]]:
                          "agentSync")
 
 
-def _parent_origin(meta: Dict[str, Any], namespace: str) -> Optional[bool]:
-    """True: the ExposedAPI belongs to a registry-made Component; False: to any other (or none); None: its
-    Component is gone (being deleted: nothing to publish)."""
-    parent = agent_sync_io.parent_component(meta)
-    if not parent:
-        return False
-    try:
-        comp = _custom().get_namespaced_custom_object(ODA, "v1", namespace, "components", parent)
-    except client.ApiException as e:
-        if e.status == 404:
-            return None
-        raise
-    return agent_sync.is_registry_originated(comp)
-
-
-def _external_registries(namespace: str, logger) -> List[Any]:
-    """[(RegistryRef, writer RegistryClient, reader source)] of the connected registries in the namespace."""
-    cr = _agent_sync_cr(namespace)
+def _connections(namespace: str, cr: Optional[Dict[str, Any]], logger) -> List[agent_sync_io.Connection]:
+    """Every registry of the namespace with its credentials, resolved once per handler call ([] while agent sync
+    is off)."""
     if cr is None:
         return []
-    out = []
-    for reg in agent_sync_io.discover_registries(_apis(), namespace, cr):
-        if reg.managed:
-            continue
-        try:
-            reader, writer = agent_sync_io.credentials(_apis(), reg, cr)
-        except SourceUnavailable as e:
-            logger.warning(f"registry {reg.id} skipped: {e}")
-            continue
-        out.append((reg, RegistryClient(reg.base_url, writer) if writer else None, agent_sync_io.source_for(reg, reader)))
-    return out
+    conns, problems = agent_sync_io.connections(_apis(), namespace, cr, _agent_settings().deploy_registries)
+    for problem in problems:
+        logger.warning(problem)
+    return conns
 
 
-def _find_card(source, org: str, card_name: str) -> Optional[Dict[str, Any]]:
-    """Look a card up in the complete listing: a plain GET only sees published cards."""
-    return next((c for c, _ in source.list_agents() if agent_sync.card_key(c) == (org, card_name)), None)
+def _registry_made_parent(meta: Dict[str, Any], namespace: str) -> bool:
+    """The ExposedAPI belongs to a registry-made Component, or to one that is gone: nothing to publish."""
+    parent = agent_sync.parent_component(meta)
+    if not parent:
+        return False
+    comp = agent_sync_io.ignore_404(_custom().get_namespaced_custom_object, ODA, "v1", namespace, "components", parent)
+    return comp is None or agent_sync.is_registry_originated(comp)
 
 
-def _publish_external(card: Dict[str, Any], me: str, meta: Dict[str, Any], namespace: str,
+def _publish_external(card: Dict[str, Any], me: str, meta: Dict[str, Any], conns: List[agent_sync_io.Connection],
                       signing: Optional[Dict[str, Any]], patch, logger) -> None:
-    targets = [t for t in _external_registries(namespace, logger) if t[0].publish and t[1] is not None]
+    """Publish to the connected registries that opted in (native API, write token). Only after their first agent
+    sync pass, like the CR's own registry (see sync_card)."""
+    targets = [c for c in conns if not c.reg.managed and c.reg.publish and c.writer
+               and agent_sync_io.first_pass_done(c.reg.id)]
     if not targets:
         return
     if not (signing and signing.get("jku")):
         logger.warning("not publishing to connected registries: they verify cards through cardSync.signing.jku, "
                        "an HTTPS key URL they trust, which is not set")
         return
-    try:
-        published = json.loads((meta.get("annotations") or {}).get(agent_sync.REGISTERED_CARDS) or "{}")
-    except ValueError:
-        published = {}
-    failed = []
-    for reg, writer, _source in targets:
+    published, failed = agent_sync.registered_cards(meta), []
+    for conn in targets:
         try:
-            action = writer.upsert(card, owner=me)
-            published[reg.id] = f"{card['provider']['organization']}/{card['name']}"
+            action = conn.write_client().upsert(card, owner=me)
+            published[conn.reg.id] = agent_sync.format_key(*agent_sync.card_key(card))
             metrics.CARD_SYNC.labels(action, "ok").inc()
         except OwnershipError as e:  # never blocks the other registries
             metrics.CARD_SYNC.labels("upsert", "rejected").inc()
-            logger.warning(f"{reg.id}: {e}")
+            logger.warning(f"{conn.reg.id}: {e}")
         except (RegistryError, httpx.HTTPError) as e:
             metrics.CARD_SYNC.labels("upsert", "error").inc()
-            failed.append(f"{reg.id}: {e}")
+            failed.append(f"{conn.reg.id}: {e}")
     patch.metadata.annotations[agent_sync.REGISTERED_CARDS] = json.dumps(published, sort_keys=True)
     if failed:
         raise kopf.TemporaryError(f"publishing to connected registries failed: {'; '.join(failed)}", delay=60)
@@ -355,17 +332,23 @@ def _publish_external(card: Dict[str, Any], me: str, meta: Dict[str, Any], names
 @kopf.timer(ODA, "v1", "exposedapis", interval=300, initial_delay=60, when=lambda spec, **_: is_a2a(spec))
 def sync_card(spec, name, namespace, meta, status, patch, logger, **_):
     # Loop guard: agents made from a registry card are that registry's, never published back from here.
-    if _parent_origin(meta, namespace) is not False:
+    if _registry_made_parent(meta, namespace):
         return
     target = _registry_for(namespace)
     if target is None:
         return
     rc, org, signing = target
+    conns = _connections(namespace, _agent_sync_cr(namespace), logger)
+    # After a restart the agent sync first replays the changes made while the operator was down: a card deleted
+    # then must delete its Component, not be republished by this handler before the replay ran.
+    if any(c.reg.managed and not agent_sync_io.first_pass_done(c.reg.id) for c in conns):
+        raise kopf.TemporaryError("waiting for the first agent sync pass of the Registry Center", delay=15)
     try:
         raw = fetch_card(candidate_urls(spec, namespace))
         me = owner_ref(namespace, name, meta["uid"])
         gateway = [(status or {}).get("apiStatus", {}).get("url", "")]
         card = build_signed_card(raw, org, signing, owner=me, hosts=allowed_hosts(spec, namespace, gateway))
+        # upsert repeats this check; it is done first so a foreign card's name never gets our key in the trust store
         existing = rc.get(org, card["name"])
         if existing is not None and card_owner(existing) != me:
             raise OwnershipError(f"card {org}/{card['name']} is owned by another source ({card_owner(existing) or 'unknown'})")
@@ -382,23 +365,9 @@ def sync_card(spec, name, namespace, meta, status, patch, logger, **_):
         metrics.CARD_SYNC.labels("upsert", "error").inc()
         raise kopf.TemporaryError(str(e), delay=60)
     metrics.CARD_SYNC.labels(action, "ok").inc()
-    patch.metadata.annotations[ANNOTATION] = f"{org}/{card['name']}"
+    patch.metadata.annotations[ANNOTATION] = agent_sync.format_key(org, card["name"])
     logger.info(f"agent card {org}/{card['name']} {action}")
-    _publish_external(card, me, meta, namespace, signing, patch, logger)
-
-
-def _managed_reader(namespace: str):
-    """Reader of the CR's own registry when agent sync is on (sees unpublished cards too), else None."""
-    cr = _agent_sync_cr(namespace)
-    if cr is None:
-        return None
-    for reg in agent_sync_io.discover_registries(_apis(), namespace, cr):
-        if reg.managed:
-            try:
-                return agent_sync_io.source_for(reg, agent_sync_io.credentials(_apis(), reg, cr)[0])
-            except SourceUnavailable:
-                return None
-    return None
+    _publish_external(card, me, meta, conns, signing, patch, logger)
 
 
 @kopf.on.delete(ODA, "v1", "exposedapis", when=lambda spec, **_: is_a2a(spec))
@@ -407,55 +376,53 @@ def remove_card(name, meta, namespace, logger, **_):
     by anyone who can patch the ExposedAPI and must not be trusted on their own."""
     me = owner_ref(namespace, name, meta["uid"])
     try:
-        _remove_managed_card(meta, namespace, me, logger)
-        _remove_external_cards(meta, namespace, me, logger)
+        conns = _connections(namespace, _agent_sync_cr(namespace), logger)
+        _remove_managed_card(meta, namespace, me, conns, logger)
+        _remove_external_cards(meta, me, conns, logger)
     except (RegistryError, SourceUnavailable, client.ApiException, httpx.HTTPError) as e:
         raise kopf.TemporaryError(str(e), delay=30)
 
 
-def _remove_managed_card(meta: Dict[str, Any], namespace: str, me: str, logger) -> None:
+def _remove_managed_card(meta: Dict[str, Any], namespace: str, me: str, conns: List[agent_sync_io.Connection],
+                         logger) -> None:
     ref = (meta.get("annotations") or {}).get(ANNOTATION)
     target = _registry_for(namespace)
-    if not ref or target is None:
+    key = agent_sync.parse_key(ref)
+    if key is None or target is None:
         return
     rc, configured_org, signing = target
-    org, _, card_name = ref.partition("/")
-    if org != configured_org:
+    if key[0] != configured_org:
         logger.warning(f"not deleting {ref}: organization differs from the configured one")
         return
-    existing = rc.get(org, card_name)
-    if existing is None:
-        reader = _managed_reader(namespace)
-        existing = _find_card(reader, org, card_name) if reader is not None else None
+    existing = rc.get(*key)
+    managed = next((c for c in conns if c.reg.managed), None)
+    if existing is None and managed is not None:  # a plain GET does not see unpublished cards
+        found = find_agent(managed.source(), key)
+        existing = found[0] if found else None
     if existing is None:
         return
     if card_owner(existing) != me:
         logger.warning(f"not deleting {ref}: the card is owned by {card_owner(existing) or 'another source'}")
         return
-    rc.delete(org, card_name)
+    rc.delete(*key)
     if signing and signing.get("trust_store"):
-        remove_trust_key(signing, namespace, card_name)
+        remove_trust_key(signing, namespace, key[1])
 
 
-def _remove_external_cards(meta: Dict[str, Any], namespace: str, me: str, logger) -> None:
-    try:
-        published = json.loads((meta.get("annotations") or {}).get(agent_sync.REGISTERED_CARDS) or "{}")
-    except ValueError:
-        return
-    if not published:
-        return
-    for reg, writer, source in _external_registries(namespace, logger):
-        ref = published.get(reg.id)
-        if not ref or writer is None:
+def _remove_external_cards(meta: Dict[str, Any], me: str, conns: List[agent_sync_io.Connection], logger) -> None:
+    published = agent_sync.registered_cards(meta)
+    for conn in conns:
+        key = agent_sync.parse_key(published.get(conn.reg.id)) if not conn.reg.managed else None
+        if key is None or not conn.writer:
             continue
-        org, _, card_name = ref.partition("/")
-        existing = _find_card(source, org, card_name)
-        if existing is None:
+        found = find_agent(conn.source(), key)
+        if found is None:
             continue
-        if card_owner(existing) != me:
-            logger.warning(f"not deleting {ref} in {reg.id}: owned by {card_owner(existing) or 'another source'}")
+        if card_owner(found[0]) != me:
+            logger.warning(f"not deleting {published[conn.reg.id]} in {conn.reg.id}: owned by "
+                           f"{card_owner(found[0]) or 'another source'}")
             continue
-        writer.delete(org, card_name)
+        conn.write_client().delete(*key)
 
 
 # ---- agent sync: registries -> Agent ODA Components -----------------------------------------------------------
@@ -464,68 +431,81 @@ DEFAULT_PROXY_IMAGE = "nginxinc/nginx-unprivileged:1.27-alpine"
 
 
 def _agent_settings() -> agent_sync_io.Settings:
-    prefixes = tuple(p for p in os.environ.get("ALLOWED_IMAGE_PREFIXES", "").split(",") if p) or stack.DEFAULT_IMAGE_PREFIXES
-    suffixes = tuple(s.strip() for s in os.environ.get("AGENT_UPSTREAM_ALLOWED_HOSTS", "").split(",") if s.strip())
-    # "<registry Component>=<endpoint>" pairs, e.g. "partner=http://partner.components.svc.cluster.local:8080"
-    deployers = tuple(s.strip() for s in os.environ.get("AGENT_DEPLOY_REGISTRIES", "").split(",") if s.strip())
     # The proxy image is the operator's own configuration, not something a card can choose: it is not subject to
     # the card image allow-list, only to being pinned.
     proxy = os.environ.get("AGENT_PROXY_IMAGE", DEFAULT_PROXY_IMAGE)
     if ":" not in proxy.rsplit("/", 1)[-1] or proxy.endswith(":latest"):
         raise kopf.PermanentError(f"AGENT_PROXY_IMAGE {proxy!r} must be pinned to a tag or digest")
-    return agent_sync_io.Settings(prefixes, proxy, suffixes, deployers,
-                                  int(os.environ.get("AGENT_SYNC_RESYNC_SECONDS", "300")),
-                                  int(os.environ.get("AGENT_SYNC_TMF639_SECONDS", "60")))
+    return agent_sync_io.Settings(
+        image_prefixes=_env_list("ALLOWED_IMAGE_PREFIXES", stack.DEFAULT_IMAGE_PREFIXES), proxy_image=proxy,
+        upstream_suffixes=_env_list("AGENT_UPSTREAM_ALLOWED_HOSTS"),
+        # "<registry Component>=<endpoint>" pairs, e.g. "partner=http://partner.components.svc.cluster.local:8080"
+        deploy_registries=_env_list("AGENT_DEPLOY_REGISTRIES"),
+        resync_seconds=int(os.environ.get("AGENT_SYNC_RESYNC_SECONDS", "300")),
+        tmf639_seconds=int(os.environ.get("AGENT_SYNC_TMF639_SECONDS", "60")))
+
+
+def _report(reg: agent_sync.RegistryRef, res: agent_sync_io.PassResult, logger) -> None:
+    for obj, action in res.applied.items():
+        metrics.AGENT_SYNC.labels(action, "ok").inc()
+        if action != "unchanged":
+            logger.info(f"agent {obj} {action} from {reg.id}")
+    for obj in res.mirrors_removed:
+        metrics.AGENT_SYNC.labels("mirror-deleted", "ok").inc()
+        logger.info(f"agent {obj} deleted: its card left {reg.id}")
+    for obj in res.components_removed:
+        metrics.AGENT_SYNC.labels("component-deleted", "ok").inc()
+        logger.warning(f"Component {obj} deleted: its card was deleted in {reg.id}")
+    for warning in res.warnings:
+        logger.warning(f"{reg.id}: {warning}")
 
 
 @kopf.timer(OPENAN, "v1alpha1", "openans", interval=15, initial_delay=20,
             when=lambda spec, **_: stack.agent_sync_enabled(spec))
-def agent_sync_timer(name, namespace, body, logger, **_):
+def agent_sync_timer(name, namespace, status, patch, logger, **_):
     """One driver on the OpenAN CR (which already carries our finalizer): kopf timers add a finalizer to what they
-    watch, so no handler may run on registry Components, which belong to Helm or to whoever installed them."""
+    watch, so no handler may run on registry Components, which belong to Helm or to whoever installed them. The
+    change-feed cursors are kept in the CR status so a restart replays what happened while the operator was down."""
     cr = _agent_sync_cr(namespace)
     if cr is None or cr["metadata"]["name"] != name:
         return
-    settings = _agent_settings()
-    regs = agent_sync_io.discover_registries(_apis(), namespace, cr, settings.deploy_registries)
-    for stale in set(agent_sync_io.STATE) - {r.id for r in regs}:
-        agent_sync_io.STATE.pop(stale, None)
+    settings, apis = _agent_settings(), _apis()
+    regs = agent_sync_io.discover_registries(apis, namespace, cr, settings.deploy_registries)
+    agent_sync_io.forget_except({r.id for r in regs})
+    stored = dict(((status or {}).get("agentSync") or {}).get("cursors") or {})
     for reg in regs:
-        st = agent_sync_io.STATE.setdefault(reg.id, agent_sync_io.State())
+        st = agent_sync_io.state_for(reg.id)
         try:
-            res = agent_sync_io.run_pass(_apis(), reg, cr, settings, logger=logger)
+            res = agent_sync_io.run_pass(apis, reg, cr, settings, stored_cursor=stored.get(reg.id))
         except SourceUnavailable as e:
-            metrics.AGENT_SYNC.labels("registry", "unavailable").inc()
+            metrics.AGENT_SYNC.labels("read", "unavailable").inc()
             if not st.down:  # one event per outage, not one per tick
                 logger.warning(f"registry {reg.id} unavailable, nothing changed: {e}")
             st.down = True
             continue
         except client.ApiException as e:
-            metrics.AGENT_SYNC.labels("registry", "error").inc()
+            metrics.AGENT_SYNC.labels("read", "kubernetes-error").inc()
             logger.warning(f"registry {reg.id}: Kubernetes API error {e.status}: {e.reason}")
             continue
         if st.down:
             logger.info(f"registry {reg.id} reachable again")
             st.down = False
-        for obj, action in res.applied.items():
-            metrics.AGENT_SYNC.labels(action, "ok").inc()
-            if action != "unchanged":
-                logger.info(f"agent {obj} {action} from {reg.id}")
-        for obj in res.deleted:
-            metrics.AGENT_SYNC.labels("deleted", "ok").inc()
-            logger.info(f"agent {obj} deleted: its card left {reg.id}")
-        for obj in res.k8s_deleted:
-            metrics.AGENT_SYNC.labels("k8s-deleted", "ok").inc()
-        for w in res.warnings:
-            logger.warning(f"{reg.id}: {w}")
+        _report(reg, res, logger)
+    cursors = {r.id: agent_sync_io.STATE[r.id].cursor for r in regs if agent_sync_io.STATE[r.id].cursor is not None}
+    if cursors != stored:  # merge patch: registries that are gone are removed with null
+        patch.status["agentSync"] = {"cursors": {**{k: None for k in stored if k not in cursors}, **cursors}}
 
 
 @kopf.on.delete(ODA, "v1", "components", labels={agent_sync.ORIGIN_LABEL: agent_sync.ORIGIN_REGISTRY})
 def release_agent(name, namespace, meta, logger, **_):
     """A registry-made Component is being deleted: delete its card too, or hold the deletion (finalizer) while the
     registry refuses. Static label filter: the finalizer only ever lands on Components this operator made."""
+    cr = _agent_sync_cr(namespace)
+    if cr is None:
+        logger.info(f"agent {name} released (agent sync is off)")
+        return
     try:
-        outcome = agent_sync_io.release(_apis(), meta, namespace, _agent_sync_cr(namespace), _agent_settings())
+        outcome = agent_sync_io.release(_apis(), meta, namespace, cr, _agent_settings())
     except agent_sync_io.DeleteRefused as e:
         metrics.AGENT_SYNC.labels("release", "refused").inc()
         logger.warning(str(e))

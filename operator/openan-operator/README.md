@@ -11,6 +11,9 @@ It lives outside the Canvas repository and has two jobs:
 2. **Agent Card sync** – every Canvas `ExposedAPI` with `apiType: a2a` is fetched from the component's
    `/.well-known/agent-card.json`, mapped to the Registry Center schema, (optionally) signed with ES256 and
    upserted into the Registry Center. Deleting the ExposedAPI deletes the card.
+3. **Agent sync** (opt-in, `spec.agentSync.enabled`) – agent registries found as ODA Components and Agent ODA
+   Components are kept in step both ways: registry cards become Components, deletes propagate in both directions
+   (see [Agent sync](#agent-sync-agent-registries---agent-oda-components)).
 
 ```mermaid
 sequenceDiagram
@@ -53,6 +56,8 @@ sequenceDiagram
 | `src/openan_operator.py` | kopf handlers |
 | `src/stack.py`, `helm_driver.py`, `secrets_bootstrap.py` | lifecycle: values, Helm, Secrets (created once, never rotated) |
 | `src/cards.py`, `card_mapper.py`, `card_signer.py`, `registry_client.py` | card sync |
+| `src/agent_sync.py`, `agent_manifests.py` | agent sync, pure logic: registry discovery, plans, the rendered Component/Deployment/Service/ConfigMap |
+| `src/agent_sync_io.py`, `registry_source.py` | agent sync, side effects: registry reads (native, TMF639), cluster writes, mirror release |
 | `crd/openan-crd.yaml` | CRD (copy kept in `charts/openan-operator/crds/`, checked by a contract test) |
 | `Dockerfile` | build with `containerized/build/build-operator.sh` (context = repo root) |
 
@@ -105,7 +110,7 @@ sequenceDiagram
     move it to `broadcast.enabled`.
 - Card sync uses the oldest `OpenAN` in the namespace that is Ready; the operator ships one namespaced Role per
   monitored namespace, so wildcard namespaces such as `odacompns-*` are watched but not managed.
-- Only `a2a` ExposedAPIs are synced; the Registry Center has no MCP concept.
+- Only `a2a` ExposedAPIs are card-synced; the Registry Center has no MCP concept.
 - The frontend component is optional (`spec.frontend.enabled`); the portal image has no published tag.
 - Image user: published images differ (1000 vs 10001); override `values.podSecurityContext` per component.
 - Helm runs inside the operator (Helm 3). `helm uninstall` keeps the data PVCs on purpose.
@@ -154,31 +159,67 @@ the registry Component, so it goes when the registry goes):
   `AGENT_UPSTREAM_ALLOWED_HOSTS` and/or an egress NetworkPolicy for pods labelled `openan.dev/origin=registry`.
 
 A card that is deleted, unpublished, rejected or deprecated removes its Component. A pass that would remove more than
-half of a registry's Components (at least 5) is held until the next pass asks for the same removals.
+half of a registry's Components (at least 5) is held until the next pass asks for the same removals. Each agent and
+each removal is applied on its own: a card the cluster rejects (or that cannot be mirrored) is reported and skipped,
+the others still sync, and the next tick runs a full pass again. Updates replace the Deployment, Service and ConfigMap
+as a whole (a switch between deploy and mirror leaves nothing of the other mode behind); the spec hash is written on
+the Component last, so a pass that failed half-way is redone.
 
-**Kubernetes -> registry.** Unchanged card sync (above) for Components made in the cluster; Components made from a
-registry are never published back.
+**Kubernetes -> registry.** The card sync above, for Components made in the cluster; Components made from a registry
+are never published back. Connected registries annotated `openan.dev/agent-publish: "true"` also get the card; the
+ExposedAPI then carries `openan.dev/registered-cards` (`{"<registry id>": "<org>/<name>"}`) next to
+`openan.dev/registered-card` (the CR's own registry).
 
 **Deletes go both ways.**
 
 | Deleted | Effect |
 |---|---|
 | card of a registry-made Component | Component (and its Deployment, Service, ConfigMap) deleted |
-| registry-made Component (by a user) | card deleted in its registry first; if the registry refuses (card owned by another identity, read-only TMF639 registry) the Component stays `Terminating` with a warning and is retried every 60 s until the card is gone. Escape hatch: annotate it `openan.dev/operator-delete: "true"`. Only a Component owned by that registry Component, named after a currently published card and carrying the hash the operator rendered for it is acted on (labels and annotations alone are not trusted), and a card published from Kubernetes is never deleted this way. Users who can create and delete Components in the namespace are trusted as much as for Kubernetes-made agents, whose deletion also deletes their cards |
-| card of a Kubernetes-made Component | the Component is deleted, on an `AGENT_DEREGISTERED` event for a card its ExposedAPI had published and that is gone from the complete list (a review state change does not count). Opt out with `openan.dev/keep-on-card-delete: "true"` on the Component. Helm-installed agents come back on the next `helm upgrade`. Events from while the operator was down are not replayed; the card is then republished instead |
-| Kubernetes-made Component | card deleted (existing card sync) |
+| registry-made Component (by a user) | card deleted in its registry first; if the registry refuses (card owned by another identity, read-only TMF639 registry) the Component stays `Terminating` with a warning and is retried every 60 s until the card is gone. Escape hatch: annotate it `openan.dev/operator-delete: "true"`. Only a Component owned by that registry Component, named after a currently published card and carrying the hash the operator rendered for it is acted on (labels and annotations alone are not trusted), and a card published from Kubernetes is never deleted this way. A mirror deleted right after its card changed (before the next pass re-rendered it) goes without its card and comes back; deleting it again deletes the card. Users who can create and delete Components in the namespace are trusted as much as for Kubernetes-made agents, whose deletion also deletes their cards |
+| card of a Kubernetes-made Component | the Component is deleted, on an `AGENT_DEREGISTERED` event for a card its ExposedAPI had published and that is gone from the complete list (a review state change does not count). A Component with several a2a APIs goes only when all of their cards are gone. Opt out with `openan.dev/keep-on-card-delete: "true"` on the Component. Helm-installed agents come back on the next `helm upgrade`. The feed cursor is kept in the CR status (`status.agentSync.cursors`), so deletions made while the operator was down are replayed for as long as the registry keeps its events (7 days); card publishing waits for that first pass after a start, so a deleted card is not republished first |
+| Kubernetes-made Component | card deleted (card sync) |
 | registry Component | its registry-made Components are garbage-collected; cards are left alone |
 
 **No loops.** Registry -> Kubernetes reads only cards without the signed `source-exposedapi` extension and writes only
 Components labelled `openan.dev/origin=registry`; card sync reads only ExposedAPIs of Components without that label
 and writes only cards with the extension. Writes are skipped when the rendered objects' hash
 (`openan.dev/spec-hash`) is unchanged, deletes are idempotent, and the operator marks its own deletes
-(`openan.dev/operator-delete`) so they are not echoed to the registry.
+(`openan.dev/operator-delete`, cleared again if the delete fails) so they are not echoed to the registry.
 
 **Operations.** The driver is a timer on the OpenAN CR, not on registry Components: kopf timers put a finalizer on
 what they watch, and registry Components belong to Helm. The only Component handler is the delete handler,
-label-filtered to registry-made Components. A registry that cannot be read completely (down, 401/403 while the
-Registry Center restarts with the new credential) changes nothing. Metric: `openan_operator_agent_sync_total`.
+label-filtered to registry-made Components (they keep `openan.dev/finalizer` while the operator is not running; remove
+it by hand to delete them then). A registry that cannot be read completely (down, 401/403 while the Registry Center
+restarts with the new credential) changes nothing and is reported once per outage. Turning the sync off stops it and
+removes the `checksum/credentials` annotation (one more Registry Center restart); the sync credential, its Secret and
+the Components it made are left in place. A registry whose event store is reset (versions start again below the
+stored cursor) is still resynced every `AGENT_SYNC_RESYNC_SECONDS`, but deletions of Kubernetes-made agents in it are
+only seen from events.
+
+| Setting (operator env, chart `configmap.extra`) | Default | Meaning |
+|---|---|---|
+| `AGENT_PROXY_IMAGE` | `nginxinc/nginx-unprivileged:1.27-alpine` | mirror proxy image, pinned tag or digest |
+| `AGENT_UPSTREAM_ALLOWED_HOSTS` | empty (any public host) | comma-separated host suffixes mirrors may proxy to |
+| `AGENT_DEPLOY_REGISTRIES` | empty | `<registry Component>=<endpoint>` pairs of connected registries whose cards may run images |
+| `AGENT_SYNC_RESYNC_SECONDS` | `300` | complete list of a native registry at least this often |
+| `AGENT_SYNC_TMF639_SECONDS` | `60` | poll interval of TMF639-only registries (no change feed) |
+| `ALLOWED_IMAGE_PREFIXES` | `ghcr.io/project-openan/` | also the allow-list of images a card may deploy |
+
+| Annotation / label | On | Meaning |
+|---|---|---|
+| label `openan.dev/origin=registry` | Components made from a card (and their children) | made by agent sync; drives the delete handler |
+| label `openan.dev/registry` | same | short hash of the source registry |
+| label `app.kubernetes.io/managed-by=openan-operator` | same | |
+| `openan.dev/source-registry`, `openan.dev/card-key` | same | `<namespace>/<registry Component>`, `<org>/<agent name>` |
+| `openan.dev/spec-hash`, `openan.dev/mode` | same | hash of the rendered objects; `deploy` or `mirror` |
+| `openan.dev/operator-delete` | same | delete without touching the card (set by the operator; escape hatch) |
+| `openan.dev/keep-on-card-delete` | Kubernetes-made Components | keep the Component when its card is deleted |
+| `openan.dev/registered-card`, `openan.dev/registered-cards` | ExposedAPIs | cards published from it (own registry; connected registries) |
+| `openan.dev/credentials-secret`, `openan.dev/agent-publish` | connected registry Components | see above |
+| label `openan.dev/registry-credentials=true`, `openan.dev/registry-component`, `openan.dev/registry-endpoint` | credentials Secrets | see above |
+
+Metric `openan_operator_agent_sync_total{action,result}`: `created`/`updated`/`unchanged`/`mirror-deleted`/
+`component-deleted` with `ok`; `read` with `unavailable` or `kubernetes-error`; `release` with `ok` or `refused`.
 
 ## Develop
 

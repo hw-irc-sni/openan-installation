@@ -34,6 +34,7 @@ configmap:
   #   AGENT_UPSTREAM_ALLOWED_HOSTS: ".example.com"                     # only these mirror targets
   #   AGENT_DEPLOY_REGISTRIES: "partner=http://partner.components.svc.cluster.local:8080"  # registries whose cards may run images
   #   AGENT_SYNC_RESYNC_SECONDS: "300"                                 # full list at least this often
+  #   AGENT_SYNC_TMF639_SECONDS: "60"                                  # poll interval of TMF639-only registries
 
 serviceAccount:
   create: true

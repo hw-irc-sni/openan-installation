@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 DEPLOY_EXT = "https://openan.dev/extensions/deployment"
 COMPONENT_LABEL = "oda.tmforum.org/componentName"
+MODE_ANNOTATION = "openan.dev/mode"  # "deploy" | "mirror"
 API_NAME = "a2aagent"
 PROXY_PORT = 8080
 PUBLICATION_DATE = "2026-01-01T00:00:00.000Z"  # constant: the manifests must hash the same on every pass
@@ -41,14 +42,17 @@ class Policy:
     image_prefixes: Tuple[str, ...]
     proxy_image: str
     upstream_suffixes: Tuple[str, ...] = ()  # empty: any public host
-    deploy_allowed: bool = False             # only registries whose card signatures are trusted
+    # The CR's own registry when its cards are signature-checked, or a connected registry the operator's
+    # configuration (AGENT_DEPLOY_REGISTRIES) trusts: only then may a card make the cluster run an image.
+    deploy_allowed: bool = False
 
 
 @dataclass(frozen=True)
 class Upstream:
-    origin: str  # scheme://host[:port], what nginx connects to (no path: see nginx_conf)
-    host: str
-    path: str    # path of the agent's interface URL, prepended to the forwarded request
+    origin: str     # scheme://host[:port], what nginx connects to (no path: see nginx_conf)
+    host: str       # for SNI
+    authority: str  # host[:port], the Host header
+    path: str       # path of the agent's interface URL, prepended to the forwarded request
 
 
 def _integer(params: Dict[str, Any], key: str, lo: int, hi: int, default: Optional[int] = None) -> int:
@@ -96,9 +100,20 @@ def primary_url(card: Dict[str, Any]) -> str:
     return url
 
 
+def _suffix_match(host: str, suffix: str) -> bool:
+    bare = suffix.lstrip(".")
+    return host == bare or host.endswith("." + bare)
+
+
 def validate_upstream(url: str, suffixes: Tuple[str, ...] = ()) -> Upstream:
-    """A mirror proxies to a URL taken from the card: refuse anything that would reach into the cluster or the node."""
-    parts = urlsplit(url)
+    """A mirror proxies to a URL taken from the card: refuse anything that would reach into the cluster or the node.
+    With `suffixes` (AGENT_UPSTREAM_ALLOWED_HOSTS) only those hosts are allowed, internal ones included. The check is
+    on the name: a public name resolving to an internal address needs an egress NetworkPolicy to be stopped."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port  # raises ValueError for out-of-range or non-numeric ports
+    except ValueError as e:
+        raise DeploymentError(f"agent url {url!r} is malformed: {e}")
     if parts.scheme not in ("http", "https"):
         raise DeploymentError(f"agent url {url!r} must be http(s)")
     if parts.username or parts.password:
@@ -107,23 +122,21 @@ def validate_upstream(url: str, suffixes: Tuple[str, ...] = ()) -> Upstream:
     # A trailing dot is the same name to a resolver but defeats suffix checks (x.svc.cluster.local.).
     if not host or not _HOST.match(host) or host.endswith(".") or ".." in host:
         raise DeploymentError(f"agent url {url!r} has an invalid host")
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        ip = None
-    if ip is not None:
-        if not ip.is_global:
-            raise DeploymentError(f"agent url host {host} is not a public address")
-    elif host == "localhost" or "." not in host or host.endswith(_INTERNAL_SUFFIXES):
-        if not any(host.endswith(s) for s in suffixes):
-            raise DeploymentError(f"agent url host {host} is cluster-internal")
-    if suffixes and not any(host == s.lstrip(".") or host.endswith(s if s.startswith(".") else "." + s) for s in suffixes):
-        raise DeploymentError(f"agent url host {host} is not in the allowed upstream hosts {list(suffixes)}")
-    path = parts.path.rstrip("/") or ""
+    if suffixes:
+        if not any(_suffix_match(host, s) for s in suffixes):
+            raise DeploymentError(f"agent url host {host} is not in the allowed upstream hosts {list(suffixes)}")
+    else:
+        try:
+            internal = not ipaddress.ip_address(host).is_global
+        except ValueError:
+            internal = host == "localhost" or "." not in host or host.endswith(_INTERNAL_SUFFIXES)
+        if internal:
+            raise DeploymentError(f"agent url host {host} is cluster-internal or not public")
+    path = parts.path.rstrip("/")
     if path and not _PATH.match(path):
         raise DeploymentError(f"agent url path {path!r} is not supported")
-    port = f":{parts.port}" if parts.port else ""
-    return Upstream(origin=f"{parts.scheme}://{host}{port}", host=host, path=path)
+    authority = f"{host}:{port}" if port else host
+    return Upstream(origin=f"{parts.scheme}://{authority}", host=host, authority=authority, path=path)
 
 
 def nginx_conf(name: str, upstream: Upstream) -> str:
@@ -142,7 +155,7 @@ def nginx_conf(name: str, upstream: Upstream) -> str:
     proxy_pass $agent_upstream;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
-    proxy_set_header Host {upstream.host};
+    proxy_set_header Host {upstream.authority};
     proxy_ssl_server_name on;
     proxy_ssl_name {upstream.host};
     proxy_buffering off;
@@ -152,12 +165,17 @@ def nginx_conf(name: str, upstream: Upstream) -> str:
 """
 
 
-def _component(name: str, card: Dict[str, Any], labels: Dict[str, str], annotations: Dict[str, str],
-               port: int, service: str) -> Dict[str, Any]:
+_SECURITY = {"runAsNonRoot": True, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]},
+             "seccompProfile": {"type": "RuntimeDefault"}}
+_RESOURCES = {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"cpu": "500m", "memory": "256Mi"}}
+
+
+def _component(name: str, card: Dict[str, Any], policy: Policy, labels: Dict[str, str], annotations: Dict[str, str],
+               mode: str, port: int) -> Dict[str, Any]:
     version = card.get("version") if isinstance(card.get("version"), str) and _VERSION.match(card["version"]) else "1.0.0"
     return {
         "apiVersion": "oda.tmforum.org/v1", "kind": "Component",
-        "metadata": {"name": name, "labels": labels, "annotations": annotations},
+        "metadata": {"name": name, "labels": labels, "annotations": {**annotations, MODE_ANNOTATION: mode}},
         "spec": {
             "componentMetadata": {
                 "id": "AGENT-" + name.rsplit("-", 1)[-1].upper(), "name": name, "functionalBlock": "AIAgent",
@@ -168,8 +186,9 @@ def _component(name: str, card: Dict[str, Any], labels: Dict[str, str], annotati
             "coreFunction": {
                 "exposedAPIs": [{
                     "name": API_NAME, "apiType": "a2a",
-                    "specification": [{"url": f"http://{service}:{port}/.well-known/agent-card.json"}],
-                    "implementation": service, "path": f"/{name}/a2a", "port": port}],
+                    "specification": [{"url": f"http://{name}.{policy.namespace}.svc.cluster.local:{port}"
+                                              "/.well-known/agent-card.json"}],
+                    "implementation": name, "path": f"/{name}/a2a", "port": port}],
                 "dependentAPIs": []},
             "eventNotification": {"publishedEvents": [], "subscribedEvents": []},
             "managementFunction": {"exposedAPIs": []},
@@ -178,32 +197,55 @@ def _component(name: str, card: Dict[str, Any], labels: Dict[str, str], annotati
     }
 
 
-_SECURITY = {"runAsNonRoot": True, "allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]},
-             "seccompProfile": {"type": "RuntimeDefault"}}
-_RESOURCES = {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"cpu": "500m", "memory": "256Mi"}}
-
-
-def _deployment(name: str, labels: Dict[str, str], container: Dict[str, Any], replicas: int,
-                volumes: List[Dict[str, Any]]) -> Dict[str, Any]:
-    pod_labels = {"app": name, COMPONENT_LABEL: name}
-    return {
+def _workload(name: str, labels: Dict[str, str], container: Dict[str, Any], replicas: int, port: int,
+              volumes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deployment + Service: the Service is the ExposedAPI implementation."""
+    container = {**container, "imagePullPolicy": "IfNotPresent", "ports": [{"containerPort": port}],
+                 "securityContext": _SECURITY, "resources": _RESOURCES}
+    deployment = {
         "apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": name, "labels": labels},
         "spec": {"replicas": replicas, "selector": {"matchLabels": {"app": name}},
-                 "template": {"metadata": {"labels": pod_labels},
+                 "template": {"metadata": {"labels": {"app": name, COMPONENT_LABEL: name}},
                               "spec": {"automountServiceAccountToken": False, "containers": [container],
-                                       "volumes": volumes}}},
-    }
+                                       "volumes": volumes}}}}
+    service = {"apiVersion": "v1", "kind": "Service", "metadata": {"name": name, "labels": labels},
+               "spec": {"selector": {"app": name}, "ports": [{"name": "http", "port": port, "targetPort": port}]}}
+    return [deployment, service]
 
 
-def _service(name: str, labels: Dict[str, str], port: int) -> Dict[str, Any]:
-    return {"apiVersion": "v1", "kind": "Service", "metadata": {"name": name, "labels": labels},
-            "spec": {"selector": {"app": name}, "ports": [{"name": "http", "port": port, "targetPort": port}]}}
+def _deploy_objects(name, card, policy, labels, annotations, child_labels, deploy) -> List[Dict[str, Any]]:
+    port, path = deploy["port"], deploy["path"].rstrip("/")
+    container = {
+        "name": "agent", "image": deploy["image"],
+        # OpenAN agents serve the RPC path under the gateway prefix too (the Canvas forwards /<name>/... as is).
+        "env": [{"name": "A2A_RPC_PATHS", "value": f"{path or '/'},/{name}/a2a"},
+                {"name": "OPENAN_GATEWAY_PATH", "value": f"/{name}/a2a"}],
+        "readinessProbe": {"httpGet": {"path": deploy["health"], "port": port}, "periodSeconds": 10}}
+    return [_component(name, card, policy, labels, annotations, "deploy", port),
+            *_workload(name, child_labels, container, deploy["replicas"], port, [])]
+
+
+def _mirror_objects(name, card, policy, labels, annotations, child_labels) -> List[Dict[str, Any]]:
+    upstream = validate_upstream(primary_url(card), policy.upstream_suffixes)
+    config = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": name, "labels": child_labels},
+              "data": {"default.conf.template": nginx_conf(name, upstream),
+                       "agent-card.json": json.dumps(card, sort_keys=True)}}
+    container = {
+        "name": "proxy", "image": policy.proxy_image,
+        "env": [{"name": "NGINX_ENTRYPOINT_LOCAL_RESOLVERS", "value": "1"}],
+        "readinessProbe": {"httpGet": {"path": "/healthz", "port": PROXY_PORT}, "periodSeconds": 10},
+        "volumeMounts": [
+            {"name": "conf", "mountPath": "/etc/nginx/templates/default.conf.template", "subPath": "default.conf.template"},
+            {"name": "conf", "mountPath": "/etc/nginx/card/agent-card.json", "subPath": "agent-card.json"}]}
+    volumes = [{"name": "conf", "configMap": {"name": name}}]
+    return [_component(name, card, policy, labels, annotations, "mirror", PROXY_PORT), config,
+            *_workload(name, child_labels, container, 1, PROXY_PORT, volumes)]
 
 
 def build(name: str, card: Dict[str, Any], policy: Policy, labels: Dict[str, str],
-          annotations: Dict[str, str]) -> Tuple[str, List[Dict[str, Any]], List[str]]:
-    """(mode, [Component, ConfigMap?, Deployment, Service], warnings). Raises DeploymentError when the agent can be
-    neither deployed nor mirrored (no usable URL)."""
+          annotations: Dict[str, str]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """([Component, ConfigMap (mirror only), Deployment, Service], warnings). Raises DeploymentError when the agent
+    can be neither deployed nor mirrored (no usable URL)."""
     warnings: List[str] = []
     child_labels = {COMPONENT_LABEL: name, **{k: v for k, v in labels.items() if k != COMPONENT_LABEL}}
     deploy = None
@@ -215,38 +257,8 @@ def build(name: str, card: Dict[str, Any], policy: Policy, labels: Dict[str, str
     except DeploymentError as e:
         warnings.append(f"deployment extension ignored: {e}")
     if deploy is not None:
-        port, path = deploy["port"], deploy["path"].rstrip("/")
-        container = {
-            "name": "agent", "image": deploy["image"], "imagePullPolicy": "IfNotPresent",
-            "ports": [{"containerPort": port}],
-            # OpenAN agents serve the RPC path under the gateway prefix too (the Canvas forwards /<name>/... as is).
-            "env": [{"name": "A2A_RPC_PATHS", "value": f"{path or '/'},/{name}/a2a"},
-                    {"name": "OPENAN_GATEWAY_PATH", "value": f"/{name}/a2a"}],
-            "readinessProbe": {"httpGet": {"path": deploy["health"], "port": port}, "periodSeconds": 10},
-            "securityContext": _SECURITY, "resources": _RESOURCES}
-        objs = [_component(name, card, labels, {**annotations, "openan.dev/mode": "deploy"}, port, name),
-                _deployment(name, child_labels, container, deploy["replicas"], []),
-                _service(name, child_labels, port)]
-        return "deploy", objs, warnings
-    upstream = validate_upstream(primary_url(card), policy.upstream_suffixes)
-    config = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": name, "labels": child_labels},
-              "data": {"default.conf.template": nginx_conf(name, upstream),
-                       "agent-card.json": json.dumps(card, sort_keys=True)}}
-    container = {
-        "name": "proxy", "image": policy.proxy_image, "imagePullPolicy": "IfNotPresent",
-        "env": [{"name": "NGINX_ENTRYPOINT_LOCAL_RESOLVERS", "value": "1"}],
-        "ports": [{"containerPort": PROXY_PORT}],
-        "readinessProbe": {"httpGet": {"path": "/healthz", "port": PROXY_PORT}, "periodSeconds": 10},
-        "volumeMounts": [{"name": "conf", "mountPath": "/etc/nginx/templates"},
-                         {"name": "card", "mountPath": "/etc/nginx/card"}],
-        "securityContext": _SECURITY, "resources": _RESOURCES}
-    volumes = [{"name": "conf", "configMap": {"name": name, "items": [{"key": "default.conf.template",
-                                                                         "path": "default.conf.template"}]}},
-               {"name": "card", "configMap": {"name": name, "items": [{"key": "agent-card.json",
-                                                                         "path": "agent-card.json"}]}}]
-    objs = [_component(name, card, labels, {**annotations, "openan.dev/mode": "mirror"}, PROXY_PORT, name), config,
-            _deployment(name, child_labels, container, 1, volumes), _service(name, child_labels, PROXY_PORT)]
-    return "mirror", objs, warnings
+        return _deploy_objects(name, card, policy, labels, annotations, child_labels, deploy), warnings
+    return _mirror_objects(name, card, policy, labels, annotations, child_labels), warnings
 
 
 def spec_hash(objs: List[Dict[str, Any]]) -> str:
