@@ -660,8 +660,8 @@ def test_sync_card_waits_for_the_first_agent_sync_pass(monkeypatch):
     monkeypatch.setattr(op, "_registry_for", lambda ns: (object(), "acme", None))
     monkeypatch.setattr(op, "_agent_sync_cr", lambda ns: CR)
     monkeypatch.setattr(op, "_connections", lambda ns, cr, logger: [conn])
-    with pytest.raises(kopf.TemporaryError):
-        op.sync_card(spec={"apiType": "a2a"}, name="x", namespace=NS, meta={"uid": "u"}, status={}, patch=None, logger=LOG)
+    monkeypatch.setattr(op, "fetch_card", lambda urls: pytest.fail("must wait for the first agent sync pass"))
+    op.sync_card(spec={"apiType": "a2a"}, name="x", namespace=NS, meta={"uid": "u"}, status={}, patch=None, logger=LOG)
 
 
 def test_release_handler_keeps_the_finalizer_on_refusal(monkeypatch):

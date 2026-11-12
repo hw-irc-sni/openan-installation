@@ -340,9 +340,11 @@ def sync_card(spec, name, namespace, meta, status, patch, logger, **_):
     rc, org, signing = target
     conns = _connections(namespace, _agent_sync_cr(namespace), logger)
     # After a restart the agent sync first replays the changes made while the operator was down: a card deleted
-    # then must delete its Component, not be republished by this handler before the replay ran.
+    # then must delete its Component, not be republished by this handler before the replay ran. The timer of this
+    # handler (first run 60 s after start, the agent sync's 20 s) publishes it afterwards.
     if any(c.reg.managed and not agent_sync_io.first_pass_done(c.reg.id) for c in conns):
-        raise kopf.TemporaryError("waiting for the first agent sync pass of the Registry Center", delay=15)
+        logger.info("card publishing waits for the first agent sync pass of the Registry Center")
+        return
     try:
         raw = fetch_card(candidate_urls(spec, namespace))
         me = owner_ref(namespace, name, meta["uid"])
