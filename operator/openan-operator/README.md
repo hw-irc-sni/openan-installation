@@ -157,11 +157,15 @@ the registry Component, so it goes when the registry goes):
   `AGENT_UPSTREAM_ALLOWED_HOSTS` (comma-separated host suffixes; when set, only those hosts are allowed). The check is
   on the URL: a public name that *resolves* to an internal address is not caught, so production should set
   `AGENT_UPSTREAM_ALLOWED_HOSTS` and/or an egress NetworkPolicy for pods labelled `openan.dev/origin=registry`.
+  IP literals must be canonical (`127.0.0.01` or `0x7f.1` are refused: nginx would read them as `127.0.0.1`) and
+  DNS names must end in an alphabetic top-level domain.
 
 A card that is deleted, unpublished, rejected or deprecated removes its Component. A pass that would remove more than
 half of a registry's Components (at least 5) is held until the next pass asks for the same removals. Each agent and
 each removal is applied on its own: a card the cluster rejects (or that cannot be mirrored) is reported and skipped,
-the others still sync, and the next tick runs a full pass again. Updates replace the Deployment, Service and ConfigMap
+the others still sync, and the next tick runs a full pass again. An existing object with an agent's name that
+the sync did not make (a Component without its labels, or a Deployment, Service or ConfigMap that Component does not
+own) is never taken over: the agent is reported and skipped. Updates replace the Deployment, Service and ConfigMap
 as a whole (a switch between deploy and mirror leaves nothing of the other mode behind); the spec hash is written on
 the Component last, so a pass that failed half-way is redone.
 

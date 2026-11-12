@@ -203,7 +203,9 @@ def test_deployment_extension_validation():
                                  "https://agent.components.svc.cluster.local/a2a", "http://localhost/a2a",
                                  "https://agent.components.svc.cluster.local./a2a", "http://localhost./a2a",
                                  "https://user:pw@agents.example.com/a2a", "ftp://agents.example.com", "http://intranet",
-                                 "http://agents.example.com:99999/a2a", "http://agents.example.com:x/a2a", "http://[::1/"])
+                                 "http://agents.example.com:99999/a2a", "http://agents.example.com:x/a2a", "http://[::1/",
+                                 "http://127.0.0.01/a2a", "http://0x7f.1/a2a", "http://2130706433/a2a", "http://10.1/a2a",
+                                 "http://agents.example.123/a2a"])
 def test_mirror_upstream_refuses_internal_and_malformed_targets(url):
     with pytest.raises(am.DeploymentError):
         am.validate_upstream(url)
@@ -494,6 +496,19 @@ def test_one_failing_agent_does_not_starve_the_others(monkeypatch):
     assert any("422" in x for x in res.warnings) and any("not mirrored" in x for x in res.warnings)
     st = sio.STATE[w.reg.id]
     assert st.cursor == 0 and st.last_pass == sio.NEVER                  # the next tick runs a full pass again
+
+
+def test_objects_not_made_by_the_sync_are_never_taken_over(monkeypatch):
+    w = world(monkeypatch, FakeRegistry([(card("A"), "published"), (card("B"), "published")]))
+    a, b = sync.object_name(w.reg, "acme", "A"), sync.object_name(w.reg, "acme", "B")
+    foreign = {"kind": "Component", "metadata": {"name": a, "uid": "f-uid", "labels": {"team": "x"}}, "spec": {"x": 1}}
+    w.custom.objs[("Component", a)] = copy.deepcopy(foreign)
+    w.core.store[("deployment", b)] = {"metadata": {"name": b, "resourceVersion": "7"}, "spec": {"mine": "no"}}
+    res = sio.run_pass(w.apis, w.reg, CR, SETTINGS, now=1000)
+    assert w.custom.objs[("Component", a)] == foreign                      # untouched
+    assert w.core.store[("deployment", b)]["spec"] == {"mine": "no"}       # untouched
+    assert ("Component", b) not in w.custom.objs                           # and no half-made agent left behind
+    assert sum("not mirrored" in x for x in res.warnings) == 2 and res.applied == {}
 
 
 def test_updates_replace_children_and_stamp_the_hash_last(monkeypatch):

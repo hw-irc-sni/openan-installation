@@ -28,6 +28,7 @@ PUBLICATION_DATE = "2026-01-01T00:00:00.000Z"  # constant: the manifests must ha
 _PATH = re.compile(r"^/[A-Za-z0-9._~/-]{0,100}$")
 _VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,49}$")
 _HOST = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+_TLD = re.compile(r"^(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$")
 _INTERNAL_SUFFIXES = (".svc", ".cluster.local", ".local", ".internal", ".localdomain")
 _DEPLOY_KEYS = {"v", "image", "port", "path", "health", "replicas"}
 
@@ -122,16 +123,22 @@ def validate_upstream(url: str, suffixes: Tuple[str, ...] = ()) -> Upstream:
     # A trailing dot is the same name to a resolver but defeats suffix checks (x.svc.cluster.local.).
     if not host or not _HOST.match(host) or host.endswith(".") or ".." in host:
         raise DeploymentError(f"agent url {url!r} has an invalid host")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    # nginx reads numeric spellings Python's ipaddress rejects (127.0.0.01, 0x7f.1): a host is either a canonical IP
+    # literal or a DNS name whose last label is alphabetic (every top-level domain is).
+    if ip is not None and str(ip) != host:
+        raise DeploymentError(f"agent url host {host} is not a canonical IP address")
+    if ip is None and not _TLD.match(host.rsplit(".", 1)[-1]):
+        raise DeploymentError(f"agent url host {host} is neither an IP address nor a DNS name with a top-level domain")
     if suffixes:
         if not any(_suffix_match(host, s) for s in suffixes):
             raise DeploymentError(f"agent url host {host} is not in the allowed upstream hosts {list(suffixes)}")
-    else:
-        try:
-            internal = not ipaddress.ip_address(host).is_global
-        except ValueError:
-            internal = host == "localhost" or "." not in host or host.endswith(_INTERNAL_SUFFIXES)
-        if internal:
-            raise DeploymentError(f"agent url host {host} is cluster-internal or not public")
+    elif (not ip.is_global) if ip is not None else (
+            host == "localhost" or "." not in host or host.endswith(_INTERNAL_SUFFIXES)):
+        raise DeploymentError(f"agent url host {host} is cluster-internal or not public")
     path = parts.path.rstrip("/")
     if path and not _PATH.match(path):
         raise DeploymentError(f"agent url path {path!r} is not supported")

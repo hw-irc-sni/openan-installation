@@ -78,6 +78,10 @@ class DeleteRefused(RuntimeError):
     """The registry will not delete the card (e.g. owned by another identity): keep the Component's finalizer."""
 
 
+class NameTaken(RuntimeError):
+    """An object with the mirror's name exists and was not made by this sync for this registry: never taken over."""
+
+
 def ignore_404(fn: Callable, *args) -> Optional[Any]:
     try:
         return fn(*args)
@@ -188,11 +192,18 @@ def _plain(obj: Any) -> Dict[str, Any]:
     return client.ApiClient().sanitize_for_serialization(obj) or {}
 
 
+def _owned_by(obj: Dict[str, Any], uid: str) -> bool:
+    return any(r.get("uid") == uid for r in (obj.get("metadata") or {}).get("ownerReferences") or [])
+
+
 def _apply_child(apis: Apis, namespace: str, body: Dict[str, Any], owner: Dict[str, Any]) -> None:
     """Create, or replace as a whole: a strategic merge would append to lists (a second Service port with the same
-    name is rejected; switching mirror <-> deploy would leave both containers in the pod)."""
+    name is rejected; switching mirror <-> deploy would leave both containers in the pod). An existing object that
+    this Component does not own is never replaced."""
     kind, name = body["kind"], body["metadata"]["name"]
     current = _plain(ignore_404(_child_op(apis, kind, "read"), name, namespace))
+    if current and not _owned_by(current, owner["uid"]):
+        raise NameTaken(f"{kind} {name} exists and is not owned by Component {owner['name']}")
     others = [r for r in (current.get("metadata") or {}).get("ownerReferences") or [] if r.get("uid") != owner["uid"]]
     body["metadata"].update(namespace=namespace, ownerReferences=[owner] + others)
     if not current:
@@ -215,6 +226,8 @@ def apply_agent(apis: Apis, reg: sync.RegistryRef, name: str, objs: List[Dict[st
     comp["metadata"].update(namespace=ns, ownerReferences=[_owner(reg.component, reg.uid)])
     children = [copy.deepcopy(o) for o in objs[1:]]
     current = ignore_404(custom.get_namespaced_custom_object, ODA, "v1", ns, "components", name)
+    if current is not None and not sync.Live.of(current).mine(reg):
+        raise NameTaken(f"Component {name} exists and was not made from {reg.id}")
     if current is not None and ((current["metadata"].get("annotations") or {}).get(sync.A_SPEC_HASH) == digest):
         owner = _owner(name, current["metadata"]["uid"])
         for child in children:  # repair deleted children only
@@ -224,12 +237,17 @@ def apply_agent(apis: Apis, reg: sync.RegistryRef, name: str, objs: List[Dict[st
         return "unchanged"
     result = "created" if current is None else "updated"
     if current is None:
+        taken = [c["kind"] for c in children if ignore_404(_child_op(apis, c["kind"], "read"), name, ns) is not None]
+        if taken:  # checked before creating anything, so a clash leaves no half-made agent behind
+            raise NameTaken(f"{', '.join(taken)} {name} already exist(s) and were not made by this sync")
         current = custom.create_namespaced_custom_object(ODA, "v1", ns, "components", comp)
     owner = _owner(name, current["metadata"]["uid"])
     for child in children:
         _apply_child(apis, ns, child, owner)
-    if not any(c["kind"] == "ConfigMap" for c in children):  # deploy mode: no proxy configuration
-        ignore_404(apis.core.delete_namespaced_config_map, name, ns)
+    if not any(c["kind"] == "ConfigMap" for c in children):  # deploy mode: drop the proxy configuration (if ours)
+        stale = _plain(ignore_404(apis.core.read_namespaced_config_map, name, ns))
+        if stale and _owned_by(stale, owner["uid"]):
+            ignore_404(apis.core.delete_namespaced_config_map, name, ns)
     custom.patch_namespaced_custom_object(ODA, "v1", ns, "components", name, {
         "metadata": {"labels": comp["metadata"]["labels"], "ownerReferences": comp["metadata"]["ownerReferences"],
                      "annotations": {**comp["metadata"]["annotations"], sync.A_SPEC_HASH: digest,
@@ -305,7 +323,7 @@ def _apply_plan(apis: Apis, reg: sync.RegistryRef, settings: Settings, st: State
             objs, warnings = render(reg, name, key, card, settings)
             out.applied[name] = apply_agent(apis, reg, name, objs)
             out.warnings += [f"{sync.format_key(*key)}: {w}" for w in warnings]
-        except am.DeploymentError as e:  # the card itself: retrying will not help until it changes
+        except (am.DeploymentError, NameTaken) as e:  # retrying will not help until the card or the cluster changes
             out.warnings.append(f"{sync.format_key(*key)}: not mirrored: {e}")
         except client.ApiException as e:
             out.warnings.append(f"{name}: Kubernetes API {e.status} {e.reason}")
