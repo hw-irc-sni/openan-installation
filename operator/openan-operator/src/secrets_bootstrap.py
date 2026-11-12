@@ -12,6 +12,10 @@ from typing import Dict
 from .card_signer import generate_keypair
 
 OPERATOR_IDENTITY = "openan-operator"
+# Read-only side of the agent sync: the change feed and the full card list need nms_oss. A separate identity owns no
+# card (owner isolation compares identities), so this token can read everything and overwrite nothing it shouldn't;
+# writes keep using OPERATOR_IDENTITY.
+SYNC_IDENTITY, SYNC_CREDENTIAL = "openan-operator-sync", "sync"
 
 
 def token_fingerprint(token: str, key: str) -> str:
@@ -34,6 +38,14 @@ def credentials_conf(entries, hmac_key: str) -> str:
                   f"credential.{cid}.role={role}", f"credential.{cid}.owner={identity}",
                   f"credential.{cid}.enabled=true"]
     return "\n".join(lines) + "\n"
+
+
+def with_sync_credential(conf: str, token: str, hmac_key: str) -> str:
+    """integration_credentials.conf with the sync credential set to `token` (replacing an older one, e.g. after its
+    token Secret was lost); every other credential is kept verbatim."""
+    prefix = f"credential.{SYNC_CREDENTIAL}."
+    kept = [line for line in conf.splitlines() if line.strip() and not line.startswith(prefix)]
+    return "\n".join(kept) + "\n" + credentials_conf([(SYNC_CREDENTIAL, SYNC_IDENTITY, token, "nms_oss")], hmac_key)
 
 
 def new_stack_secrets(registry_url: str) -> Dict[str, Dict[str, str]]:

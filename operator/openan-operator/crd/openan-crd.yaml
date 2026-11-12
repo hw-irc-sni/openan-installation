@@ -44,6 +44,13 @@ spec:
                     properties:
                       enabled: {type: boolean, default: true}
                       jku: {type: string, description: "HTTPS JWKS URL (host must be in the Registry jwk_allowlist)"}
+              agentSync:
+                type: object
+                description: >-
+                  Two-way sync between agent registries (Resource Inventory ODA Components in this namespace) and
+                  Agent ODA Components. Adds a read-only registry credential and restarts the Registry Center once.
+                properties:
+                  enabled: {type: boolean, default: false}
               retainData: {type: boolean, default: false}
           status:
             type: object

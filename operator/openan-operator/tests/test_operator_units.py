@@ -261,6 +261,7 @@ def _delete_setup(monkeypatch, existing, org="acme"):
 
     monkeypatch.setattr(op, "_registry_for", lambda ns: (RC(), org, {"trust_store": True}))
     monkeypatch.setattr(op, "remove_trust_key", lambda sig, ns, n: calls.append(("trust", n)))
+    monkeypatch.setattr(op, "_agent_sync_cr", lambda ns: None)  # agent sync off: no manage-list fallback
     meta = {"annotations": {cards.ANNOTATION: "acme/My-Agent"}, "uid": "u1"}
     return op, calls, meta
 

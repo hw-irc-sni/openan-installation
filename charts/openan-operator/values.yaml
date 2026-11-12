@@ -29,6 +29,10 @@ tmf:
 configmap:
   loglevel: "20"
   extra: {}             # e.g. METRICS_PORT: "8000", REGISTRY_URL_OVERRIDE: "http://..."
+  # Agent sync (spec.agentSync.enabled on the OpenAN CR), all optional:
+  #   AGENT_PROXY_IMAGE: "nginxinc/nginx-unprivileged:1.27-alpine"   # mirror proxy, pinned tag
+  #   AGENT_UPSTREAM_ALLOWED_HOSTS: ".example.com"                     # only these mirror targets
+  #   AGENT_SYNC_RESYNC_SECONDS: "300"                                 # full list at least this often
 
 serviceAccount:
   create: true

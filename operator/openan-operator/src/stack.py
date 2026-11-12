@@ -10,7 +10,7 @@ COMPONENTS = ("registryCenter", "orchestrationCenter", "frontend")
 CHART_DIR = {"registryCenter": "openan-registry-center", "orchestrationCenter": "openan-orchestration-center",
              "frontend": "openan-frontend"}
 # Generated values a CR must not change: they decide where credentials are mounted and where they are sent.
-PINNED = {"registryCenter": ("runtimeSecret", "credentialSecret", "trust"),
+PINNED = {"registryCenter": ("runtimeSecret", "credentialSecret", "trust", "credentialsChecksum"),
           "orchestrationCenter": ("runtimeSecret", "registryUrl"),
           "frontend": ("backendUrl", "registryUrl")}
 # Non-secret env maps rendered into ConfigMaps (after the generated keys, so they would win): these keys are
@@ -158,8 +158,10 @@ def _merge(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def chart_values(cr_name: str, spec: Dict[str, Any], comp: str) -> Dict[str, Any]:
-    """Helm values for one component. User 'values' override generated ones; image tag stays required."""
+def chart_values(cr_name: str, spec: Dict[str, Any], comp: str, credentials_checksum: str = "") -> Dict[str, Any]:
+    """Helm values for one component. User 'values' override generated ones; image tag stays required.
+    `credentials_checksum` restarts the Registry Center when its credentials file changes (it is mounted by subPath,
+    so the pod never sees Secret updates on its own)."""
     rc_rel = release_name(cr_name, "registryCenter")
     oc_rel = release_name(cr_name, "orchestrationCenter")
     sig_off = not (spec.get("cardSync", {}).get("signing", {}).get("enabled", True))
@@ -168,6 +170,8 @@ def chart_values(cr_name: str, spec: Dict[str, Any], comp: str) -> Dict[str, Any
         gen = {"runtimeSecret": secret_name(cr_name, "registry-runtime"),
                "credentialSecret": secret_name(cr_name, "registry-credentials"),
                "registry": {"signatureValidation": not sig_off}}
+        if credentials_checksum:
+            gen["credentialsChecksum"] = credentials_checksum
         if not sig_off:  # keys of signed cards live in an operator-managed ConfigMap (see cards.trust_document)
             gen["trust"] = {"organization": spec.get("registry", {}).get("organization", "openan"),
                             "configMap": secret_name(cr_name, "registry-trust")}
@@ -210,10 +214,17 @@ def is_ready(component_cr: Dict[str, Any] | None) -> bool:
     return (st.get("summary/status", {}) or {}).get("deployment_status") == "Complete"
 
 
-def pick_cr(items):
-    """The OpenAN CR that card sync talks to: oldest first, and only one that reconciled to Ready, so a
-    rejected or half-installed second CR in the namespace can never become the sync target."""
-    def ready(i):
-        return any(c.get("type") == "Ready" and c.get("status") == "True" for c in (i.get("status") or {}).get("conditions", []))
-    usable = [i for i in items if ready(i) and i.get("spec", {}).get("cardSync", {}).get("enabled", True)]
+def is_cr_ready(cr: Dict[str, Any]) -> bool:
+    return any(c.get("type") == "Ready" and c.get("status") == "True" for c in (cr.get("status") or {}).get("conditions", []))
+
+
+def agent_sync_enabled(spec: Dict[str, Any]) -> bool:
+    return bool((spec.get("agentSync") or {}).get("enabled", False))
+
+
+def pick_cr(items, feature: str = "cardSync"):
+    """The OpenAN CR that card sync (or agent sync) talks to: oldest first, and only one that reconciled to Ready,
+    so a rejected or half-installed second CR in the namespace can never become the sync target."""
+    default = feature == "cardSync"
+    usable = [i for i in items if is_cr_ready(i) and i.get("spec", {}).get(feature, {}).get("enabled", default)]
     return min(usable, key=lambda i: i["metadata"].get("creationTimestamp", ""), default=None)

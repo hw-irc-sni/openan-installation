@@ -15,6 +15,9 @@ spec:
       labels: {{- include "rc.labels" . | nindent 8 }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.credentialsChecksum }}
+        checksum/credentials: {{ . | quote }}
+        {{- end }}
     spec:
       terminationGracePeriodSeconds: 60
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}

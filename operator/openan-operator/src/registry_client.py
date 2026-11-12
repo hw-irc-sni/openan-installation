@@ -72,6 +72,27 @@ class RegistryClient:
             raise RegistryError(r.status_code, r.text)
         return "updated"
 
+    def list_manage(self) -> list:
+        """Every card with its review status (`publishStatus`), unpaginated. Needs an nms_oss credential."""
+        r = self._c.get(f"{BASE}/agent-cards/manage", headers=self._h)
+        if r.status_code != 200:
+            raise RegistryError(r.status_code, r.text)
+        body = r.json()
+        cards = body.get("agentCards") if isinstance(body, dict) else None
+        if not isinstance(cards, list):
+            raise RegistryError(r.status_code, "manage list without agentCards")
+        return cards
+
+    def changes(self, since: int, limit: int = 1000) -> Dict[str, Any]:
+        """Change feed page: {"changes": [...], "has_more": bool, "next_since": int}. Needs an nms_oss credential."""
+        r = self._c.get(f"{BASE}/changes", params={"since": since, "limit": limit}, headers=self._h)
+        if r.status_code != 200:
+            raise RegistryError(r.status_code, r.text)
+        body = r.json()
+        if not isinstance(body, dict) or not isinstance(body.get("changes"), list):
+            raise RegistryError(r.status_code, "change feed page without changes")
+        return body
+
     def delete(self, org: str, name: str) -> bool:
         r = self._c.delete(self._path(org, name), headers=self._h)
         if r.status_code == 404:

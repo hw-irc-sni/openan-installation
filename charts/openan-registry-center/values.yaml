@@ -26,6 +26,9 @@ replicas: 1   # RC events/schedulers are process-local: keep 1
 # Secrets are created by the OpenAN operator (or by hand) and only referenced here.
 runtimeSecret: ""      # env INTEGRATION_TOKEN_HMAC_KEY / INTEGRATION_FINGERPRINT_KEY (required)
 credentialSecret: ""   # key integration_credentials.conf (required, static_bearer tokens)
+# Set by the OpenAN operator to the hash of the credentials file: the file is mounted by subPath and never
+# refreshed in a running pod, so a new value restarts it. Empty: no annotation.
+credentialsChecksum: ""
 
 registry:
   identityMode: token
