@@ -127,11 +127,13 @@ Registries in other namespaces are not discovered.
   registry API is served by a small reverse proxy to the external URL (example:
   `oda_canvas/manifests/openan/connected-registry.yaml.tpl`). Annotations on that Component:
   `openan.dev/credentials-secret` (Secret with `token` and optional `readToken`, labelled
-  `openan.dev/registry-credentials=true` and annotated `openan.dev/registry-component: <that Component's name>`, so
-  a Secret is only ever sent to its own registry; the operator refuses its own Secrets) and
+  `openan.dev/registry-credentials=true` and annotated `openan.dev/registry-component: <that Component's name>` and
+  `openan.dev/registry-endpoint: http://<implementation>.<namespace>.svc.cluster.local:<port>`, so a Secret is only
+  ever sent to that registry at that endpoint; the operator refuses its own Secrets) and
   `openan.dev/agent-publish: "true"` (publish Kubernetes-made cards there; needs `cardSync.signing.jku`, an HTTPS key
   URL that registry trusts). Whether its cards may run images is operator configuration, not an annotation:
-  `AGENT_DEPLOY_REGISTRIES` (comma-separated registry Component names).
+  `AGENT_DEPLOY_REGISTRIES` (comma-separated `<registry Component>=<endpoint>` pairs: a Component re-created or
+  re-pointed under the same name does not inherit the trust).
 
 **Registry -> Kubernetes.** Every 15 s the operator reads the change feed (`/changes`) and, when something changed or
 every `AGENT_SYNC_RESYNC_SECONDS` (300), the complete card list. Each *published* card that was not published from
@@ -162,7 +164,7 @@ registry are never published back.
 | Deleted | Effect |
 |---|---|
 | card of a registry-made Component | Component (and its Deployment, Service, ConfigMap) deleted |
-| registry-made Component (by a user) | card deleted in its registry first; if the registry refuses (card owned by another identity, read-only TMF639 registry) the Component stays `Terminating` with a warning and is retried every 60 s until the card is gone. Escape hatch: annotate it `openan.dev/operator-delete: "true"`. Only a Component owned by that registry Component and named after the card is acted on (labels and annotations alone are not trusted), and a card published from Kubernetes is never deleted this way |
+| registry-made Component (by a user) | card deleted in its registry first; if the registry refuses (card owned by another identity, read-only TMF639 registry) the Component stays `Terminating` with a warning and is retried every 60 s until the card is gone. Escape hatch: annotate it `openan.dev/operator-delete: "true"`. Only a Component owned by that registry Component, named after a currently published card and carrying the hash the operator rendered for it is acted on (labels and annotations alone are not trusted), and a card published from Kubernetes is never deleted this way. Users who can create and delete Components in the namespace are trusted as much as for Kubernetes-made agents, whose deletion also deletes their cards |
 | card of a Kubernetes-made Component | the Component is deleted, on an `AGENT_DEREGISTERED` event for a card its ExposedAPI had published and that is gone from the complete list (a review state change does not count). Opt out with `openan.dev/keep-on-card-delete: "true"` on the Component. Helm-installed agents come back on the next `helm upgrade`. Events from while the operator was down are not replayed; the card is then republished instead |
 | Kubernetes-made Component | card deleted (existing card sync) |
 | registry Component | its registry-made Components are garbage-collected; cards are left alone |

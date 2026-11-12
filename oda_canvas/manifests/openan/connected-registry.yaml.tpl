@@ -17,9 +17,10 @@
 #     --from-literal=token=... --from-literal=readToken=...
 #   kubectl -n components label secret ${CONNECTED_REGISTRY_NAME}-credentials openan.dev/registry-credentials=true
 #   kubectl -n components annotate secret ${CONNECTED_REGISTRY_NAME}-credentials \
-#     openan.dev/registry-component=${CONNECTED_REGISTRY_NAME}
+#     openan.dev/registry-component=${CONNECTED_REGISTRY_NAME} \
+#     openan.dev/registry-endpoint=http://${CONNECTED_REGISTRY_NAME}.components.svc.cluster.local:8080
 # Letting this registry's cards run images in the cluster is operator configuration: add its name to the operator
-# env AGENT_DEPLOY_REGISTRIES (chart configmap.extra).
+# env AGENT_DEPLOY_REGISTRIES as ${CONNECTED_REGISTRY_NAME}=http://${CONNECTED_REGISTRY_NAME}.components.svc.cluster.local:8080
 apiVersion: v1
 kind: ConfigMap
 metadata:

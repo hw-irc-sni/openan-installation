@@ -466,6 +466,7 @@ DEFAULT_PROXY_IMAGE = "nginxinc/nginx-unprivileged:1.27-alpine"
 def _agent_settings() -> agent_sync_io.Settings:
     prefixes = tuple(p for p in os.environ.get("ALLOWED_IMAGE_PREFIXES", "").split(",") if p) or stack.DEFAULT_IMAGE_PREFIXES
     suffixes = tuple(s.strip() for s in os.environ.get("AGENT_UPSTREAM_ALLOWED_HOSTS", "").split(",") if s.strip())
+    # "<registry Component>=<endpoint>" pairs, e.g. "partner=http://partner.components.svc.cluster.local:8080"
     deployers = tuple(s.strip() for s in os.environ.get("AGENT_DEPLOY_REGISTRIES", "").split(",") if s.strip())
     # The proxy image is the operator's own configuration, not something a card can choose: it is not subject to
     # the card image allow-list, only to being pinned.
@@ -524,7 +525,7 @@ def release_agent(name, namespace, meta, logger, **_):
     """A registry-made Component is being deleted: delete its card too, or hold the deletion (finalizer) while the
     registry refuses. Static label filter: the finalizer only ever lands on Components this operator made."""
     try:
-        outcome = agent_sync_io.release(_apis(), meta, namespace, _agent_sync_cr(namespace))
+        outcome = agent_sync_io.release(_apis(), meta, namespace, _agent_sync_cr(namespace), _agent_settings())
     except agent_sync_io.DeleteRefused as e:
         metrics.AGENT_SYNC.labels("release", "refused").inc()
         logger.warning(str(e))

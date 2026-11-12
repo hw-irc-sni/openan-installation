@@ -92,7 +92,10 @@ def test_discover_managed_external_and_skipped_components():
     ext = sync.discover(partner, MANAGED, True, True)
     assert not ext.managed and ext.publish and ext.credentials_secret == "partner-creds"
     assert not ext.deploy_allowed                                       # an annotation never grants deploy trust
-    assert sync.discover(partner, MANAGED, True, True, deploy_registries=("partner",)).deploy_allowed
+    endpoint = "http://openan-registry-center-registry-center.components.svc.cluster.local:5000"
+    assert sync.discover(partner, MANAGED, True, True, deploy_registries=(f"partner={endpoint}",)).deploy_allowed
+    assert not sync.discover(partner, MANAGED, True, True, deploy_registries=("partner",)).deploy_allowed
+    assert not sync.discover(partner, MANAGED, True, True, deploy_registries=("partner=http://elsewhere:1",)).deploy_allowed
     ro = sync.discover(registry_component(name="p2", api="tmf639", spec_url="https://x/tmf639-a2a-agent-v5.yaml",
                                           annotations={sync.A_PUBLISH: "true"}), MANAGED, True, True)
     assert ro.flavour == "tmf639" and not ro.publish                    # TMF639 registries are read-only
@@ -525,6 +528,19 @@ def test_release_ignores_forged_labels_and_annotations(monkeypatch):
     assert not any(m == "DELETE" for m, _, _ in registry.calls)
 
 
+def test_release_requires_the_rendered_hash_of_a_published_card(monkeypatch):
+    registry = FakeRegistry([(card("A"), "published")])
+    apis, custom, _, reg = world(monkeypatch, registry)
+    io.run_pass(apis, reg, CR, SETTINGS, now=1000)                       # the operator renders and stamps the mirror
+    made = custom.objs[("Component", sync.object_name(reg, "acme", "A"))]["metadata"]
+    imitation = {**made, "annotations": {k: v for k, v in made["annotations"].items() if k != sync.A_SPEC_HASH}}
+    assert io.release(apis, imitation, NS, CR, SETTINGS) == "not made from this registry"
+    registry.cards = [(card("A"), "registered")]
+    assert io.release(apis, made, NS, CR, SETTINGS) == "card not published"
+    registry.cards = [(card("A"), "published")]
+    assert io.release(apis, made, NS, CR, SETTINGS) == "card deleted"
+
+
 def test_release_passes_when_the_registry_is_gone(monkeypatch):
     apis, custom, _, reg = world(monkeypatch, FakeRegistry([(card("A"), "published")]))
     del custom.objs[("Component", MANAGED)]
@@ -538,11 +554,15 @@ def test_foreign_credentials_secret_must_be_labelled(monkeypatch):
     core.secrets["openan-operator-token"] = ({"token": "writer"}, {"app.kubernetes.io/managed-by": "openan-operator"})
     with pytest.raises(SourceUnavailable):
         io.credentials(apis, reg, CR)                                     # no exfiltration of the operator token
+    partner = registry_component(name="partner", annotations={sync.A_CREDENTIALS: "partner-creds"})
+    reg = sync.discover(partner, MANAGED, True, True)
     core.secrets["partner-creds"] = ({"token": "w", "readToken": "r"}, {io.CREDENTIALS_LABEL: "true"},
-                                     {sync.A_FOR_REGISTRY: "partner"})
-    reg = sync.discover(registry_component(name="partner", annotations={sync.A_CREDENTIALS: "partner-creds"}),
-                        MANAGED, True, True)
+                                     {sync.A_FOR_REGISTRY: "partner", sync.A_FOR_ENDPOINT: reg.base_url})
     assert io.credentials(apis, reg, CR) == ("r", "w")
+    # the same registry Component re-pointed at another Service does not get the tokens
+    partner["spec"]["coreFunction"]["exposedAPIs"][0]["implementation"] = "attacker-svc"
+    with pytest.raises(SourceUnavailable):
+        io.credentials(apis, sync.discover(partner, MANAGED, True, True), CR)
     # a fake registry Component naming the partner's Secret does not get its tokens
     fake = sync.discover(registry_component(name="fake", annotations={sync.A_CREDENTIALS: "partner-creds"}),
                          MANAGED, True, True)

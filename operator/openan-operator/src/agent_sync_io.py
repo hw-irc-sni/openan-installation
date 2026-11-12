@@ -115,12 +115,12 @@ def credentials(apis: Apis, reg: sync.RegistryRef, cr: Optional[Dict[str, Any]])
         raise SourceUnavailable(f"registry {reg.id} has no {sync.A_CREDENTIALS} annotation")
     sec = _get(core.read_namespaced_secret, reg.credentials_secret, reg.namespace)
     labels = (sec.metadata.labels or {}) if sec is not None else {}
-    bound = ((sec.metadata.annotations or {}) if sec is not None else {}).get(sync.A_FOR_REGISTRY)
+    bound = (sec.metadata.annotations or {}) if sec is not None else {}
     if sec is None or labels.get(CREDENTIALS_LABEL) != "true" or labels.get(sync.MANAGED_BY[0]) == sync.MANAGED_BY[1]:
         raise SourceUnavailable(f"Secret {reg.credentials_secret} is missing or not labelled {CREDENTIALS_LABEL}=true")
-    if bound != reg.component:
-        raise SourceUnavailable(f"Secret {reg.credentials_secret} is not for registry {reg.component} "
-                                f"(annotation {sync.A_FOR_REGISTRY}={bound!r})")
+    if bound.get(sync.A_FOR_REGISTRY) != reg.component or bound.get(sync.A_FOR_ENDPOINT) != reg.base_url:
+        raise SourceUnavailable(f"Secret {reg.credentials_secret} is not for registry {reg.component} at {reg.base_url} "
+                                f"(annotations {sync.A_FOR_REGISTRY}, {sync.A_FOR_ENDPOINT})")
     data = sec.data or {}
     writer = decode_secret(data, "token") if "token" in data else None
     reader = decode_secret(data, "readToken") if "readToken" in data else writer
@@ -298,7 +298,8 @@ def run_pass(apis: Apis, reg: sync.RegistryRef, cr: Optional[Dict[str, Any]], se
 
 # ---- mirror delete (user-initiated) ----------------------------------------------------------------------------
 
-def release(apis: Apis, meta: Dict[str, Any], namespace: str, cr: Optional[Dict[str, Any]]) -> str:
+def release(apis: Apis, meta: Dict[str, Any], namespace: str, cr: Optional[Dict[str, Any]],
+            settings: Optional[Settings] = None) -> str:
     """A registry-made Component is being deleted. Operator-initiated deletes and orphans pass; otherwise the card
     is deleted in its registry first ('delete on either side'); a refusal raises DeleteRefused (finalizer kept)."""
     ann = meta.get("annotations") or {}
@@ -310,7 +311,7 @@ def release(apis: Apis, meta: Dict[str, Any], namespace: str, cr: Optional[Dict[
         return "no source"
     comp = _get(apis.custom().get_namespaced_custom_object, ODA, "v1", namespace, "components", source_name)
     managed, signing, publish = managed_context(cr)
-    reg = sync.discover(comp, managed, signing, publish) if comp else None
+    reg = sync.discover(comp, managed, signing, publish, settings.deploy_registries if settings else ()) if comp else None
     if reg is None:
         return "registry gone"
     # Labels and annotations are editable: only act for an object this operator made from this very card,
@@ -319,11 +320,26 @@ def release(apis: Apis, meta: Dict[str, Any], namespace: str, cr: Optional[Dict[
     if not owned or sync.object_name(reg, org, agent) != meta.get("name"):
         return "not made from this registry"
     reader, writer = credentials(apis, reg, cr)
-    found = next((c for c, _ in source_for(reg, reader).list_agents() if sync.card_key(c) == (org, agent)), None)
+    found = next(((c, s) for c, s in source_for(reg, reader).list_agents() if sync.card_key(c) == (org, agent)), None)
     if found is None:
         return "card absent"
-    if sync.is_operator_card(found):  # published from a cluster, never mirrored: not this Component's card
+    card, status = found
+    if sync.is_operator_card(card):  # published from a cluster, never mirrored: not this Component's card
         return "card published from Kubernetes"
+    if status != sync.PUBLISHED:     # only published cards are ever mirrored
+        return "card not published"
+    if settings is not None:
+        # The mirror must be exactly what this operator renders for that card (same hash it stamped), not an
+        # object somebody named and labelled after it.
+        policy = am.Policy(namespace, settings.image_prefixes, settings.proxy_image, settings.upstream_suffixes,
+                           reg.deploy_allowed)
+        try:
+            _m, objs, _w = am.build(meta.get("name", ""), card, policy, sync.labels_for(reg, meta.get("name", "")),
+                                    sync.annotations_for(reg, org, agent))
+        except am.DeploymentError:
+            return "not made from this registry"
+        if am.spec_hash(objs) != ann.get(sync.A_SPEC_HASH):
+            return "not made from this registry"
     if reg.flavour != "native" or not writer:
         raise DeleteRefused(f"registry {reg.id} is read-only for the operator: delete {org}/{agent} there first")
     try:

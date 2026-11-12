@@ -30,8 +30,10 @@ A_OP_DELETE = "openan.dev/operator-delete"        # set before every operator-in
 # Annotations on registry Components (set by whoever installs a connected registry's proxy Component).
 A_CREDENTIALS = "openan.dev/credentials-secret"
 A_PUBLISH = "openan.dev/agent-publish"
-# On the credentials Secret: the registry Component it belongs to (a Secret is only sent to that registry).
+# On the credentials Secret: the registry Component it belongs to and that Component's endpoint
+# (http://<implementation>.<namespace>.svc.cluster.local:<port>); a Secret is only ever sent to exactly that.
 A_FOR_REGISTRY = "openan.dev/registry-component"
+A_FOR_ENDPOINT = "openan.dev/registry-endpoint"
 # Annotations on Kubernetes-made agents.
 A_KEEP = "openan.dev/keep-on-card-delete"         # on the Component: do not delete it when its card is deleted
 REGISTERED_CARDS = "openan.dev/registered-cards"  # on the ExposedAPI: {"<registry id>": "<org>/<name>"} (non-managed)
@@ -115,9 +117,9 @@ def registry_flavour(component: Dict[str, Any]) -> Optional[Tuple[str, Dict[str,
 
 def discover(component: Dict[str, Any], managed_name: Optional[str], managed_signing: bool,
              managed_publish: bool, deploy_registries: Tuple[str, ...] = ()) -> Optional[RegistryRef]:
-    """`deploy_registries`: names of non-managed registry Components whose cards may run images. Operator
-    configuration (AGENT_DEPLOY_REGISTRIES), never an annotation: whoever can annotate a Component must not be able
-    to let a registry start workloads."""
+    """`deploy_registries`: "<registry Component>=<endpoint>" entries of non-managed registries whose cards may run
+    images. Operator configuration (AGENT_DEPLOY_REGISTRIES), never an annotation, and bound to the endpoint as well
+    as the name: a Component re-created or re-pointed under the same name does not inherit the trust."""
     md = component.get("metadata") or {}
     if md.get("deletionTimestamp") or (md.get("labels") or {}).get(ORIGIN_LABEL) == ORIGIN_REGISTRY:
         return None
@@ -130,11 +132,12 @@ def discover(component: Dict[str, Any], managed_name: Optional[str], managed_sig
         return None
     ann = md.get("annotations") or {}
     managed = md.get("name") == managed_name
+    base_url = f"http://{impl}.{ns}.svc.cluster.local:{port}"
     return RegistryRef(
         namespace=ns, component=md.get("name", ""), uid=md.get("uid", ""), flavour=flavour,
-        base_url=f"http://{impl}.{ns}.svc.cluster.local:{port}", managed=managed,
+        base_url=base_url, managed=managed,
         publish=flavour == "native" and (managed_publish if managed else _true(ann.get(A_PUBLISH))),
-        deploy_allowed=managed_signing if managed else md.get("name") in deploy_registries,
+        deploy_allowed=managed_signing if managed else f"{md.get('name')}={base_url}" in deploy_registries,
         credentials_secret=None if managed else ann.get(A_CREDENTIALS))
 
 
