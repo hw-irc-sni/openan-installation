@@ -16,6 +16,10 @@
 #   kubectl -n components create secret generic ${CONNECTED_REGISTRY_NAME}-credentials \
 #     --from-literal=token=... --from-literal=readToken=...
 #   kubectl -n components label secret ${CONNECTED_REGISTRY_NAME}-credentials openan.dev/registry-credentials=true
+#   kubectl -n components annotate secret ${CONNECTED_REGISTRY_NAME}-credentials \
+#     openan.dev/registry-component=${CONNECTED_REGISTRY_NAME}
+# Letting this registry's cards run images in the cluster is operator configuration: add its name to the operator
+# env AGENT_DEPLOY_REGISTRIES (chart configmap.extra).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -87,7 +91,6 @@ metadata:
   annotations:
     openan.dev/credentials-secret: ${CONNECTED_REGISTRY_NAME}-credentials
     openan.dev/agent-publish: "false"   # "true": also publish cards of agents made in this cluster
-    openan.dev/agent-deploy: "false"    # "true": its cards' deployment extension may run (allow-listed) images here
 spec:
   componentMetadata:
     id: OPENAN-RC

@@ -104,7 +104,8 @@ def validate_upstream(url: str, suffixes: Tuple[str, ...] = ()) -> Upstream:
     if parts.username or parts.password:
         raise DeploymentError("agent url must not carry credentials")
     host = (parts.hostname or "").lower()
-    if not host or not _HOST.match(host):
+    # A trailing dot is the same name to a resolver but defeats suffix checks (x.svc.cluster.local.).
+    if not host or not _HOST.match(host) or host.endswith(".") or ".." in host:
         raise DeploymentError(f"agent url {url!r} has an invalid host")
     try:
         ip = ipaddress.ip_address(host)

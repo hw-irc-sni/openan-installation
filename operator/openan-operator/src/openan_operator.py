@@ -466,12 +466,13 @@ DEFAULT_PROXY_IMAGE = "nginxinc/nginx-unprivileged:1.27-alpine"
 def _agent_settings() -> agent_sync_io.Settings:
     prefixes = tuple(p for p in os.environ.get("ALLOWED_IMAGE_PREFIXES", "").split(",") if p) or stack.DEFAULT_IMAGE_PREFIXES
     suffixes = tuple(s.strip() for s in os.environ.get("AGENT_UPSTREAM_ALLOWED_HOSTS", "").split(",") if s.strip())
+    deployers = tuple(s.strip() for s in os.environ.get("AGENT_DEPLOY_REGISTRIES", "").split(",") if s.strip())
     # The proxy image is the operator's own configuration, not something a card can choose: it is not subject to
     # the card image allow-list, only to being pinned.
     proxy = os.environ.get("AGENT_PROXY_IMAGE", DEFAULT_PROXY_IMAGE)
     if ":" not in proxy.rsplit("/", 1)[-1] or proxy.endswith(":latest"):
         raise kopf.PermanentError(f"AGENT_PROXY_IMAGE {proxy!r} must be pinned to a tag or digest")
-    return agent_sync_io.Settings(prefixes, proxy, suffixes,
+    return agent_sync_io.Settings(prefixes, proxy, suffixes, deployers,
                                   int(os.environ.get("AGENT_SYNC_RESYNC_SECONDS", "300")),
                                   int(os.environ.get("AGENT_SYNC_TMF639_SECONDS", "60")))
 
@@ -485,7 +486,7 @@ def agent_sync_timer(name, namespace, body, logger, **_):
     if cr is None or cr["metadata"]["name"] != name:
         return
     settings = _agent_settings()
-    regs = agent_sync_io.discover_registries(_apis(), namespace, cr)
+    regs = agent_sync_io.discover_registries(_apis(), namespace, cr, settings.deploy_registries)
     for stale in set(agent_sync_io.STATE) - {r.id for r in regs}:
         agent_sync_io.STATE.pop(stale, None)
     for reg in regs:

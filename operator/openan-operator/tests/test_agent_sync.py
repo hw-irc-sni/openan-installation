@@ -87,9 +87,12 @@ def test_discover_managed_external_and_skipped_components():
     m = sync.discover(registry_component(), MANAGED, True, True)
     assert m.managed and m.publish and m.deploy_allowed and m.credentials_secret is None
     assert m.base_url == "http://openan-registry-center-registry-center.components.svc.cluster.local:5000"
-    ext = sync.discover(registry_component(name="partner", annotations={sync.A_CREDENTIALS: "partner-creds",
-                                                                        sync.A_PUBLISH: "true"}), MANAGED, True, True)
-    assert not ext.managed and ext.publish and not ext.deploy_allowed and ext.credentials_secret == "partner-creds"
+    partner = registry_component(name="partner", annotations={sync.A_CREDENTIALS: "partner-creds", sync.A_PUBLISH: "true",
+                                                              "openan.dev/agent-deploy": "true"})
+    ext = sync.discover(partner, MANAGED, True, True)
+    assert not ext.managed and ext.publish and ext.credentials_secret == "partner-creds"
+    assert not ext.deploy_allowed                                       # an annotation never grants deploy trust
+    assert sync.discover(partner, MANAGED, True, True, deploy_registries=("partner",)).deploy_allowed
     ro = sync.discover(registry_component(name="p2", api="tmf639", spec_url="https://x/tmf639-a2a-agent-v5.yaml",
                                           annotations={sync.A_PUBLISH: "true"}), MANAGED, True, True)
     assert ro.flavour == "tmf639" and not ro.publish                    # TMF639 registries are read-only
@@ -170,6 +173,7 @@ def test_deployment_extension_validation():
 
 @pytest.mark.parametrize("url", ["http://10.0.0.5/a2a", "http://169.254.169.254/latest", "http://127.0.0.1:8080",
                                  "https://agent.components.svc.cluster.local/a2a", "http://localhost/a2a",
+                                 "https://agent.components.svc.cluster.local./a2a", "http://localhost./a2a",
                                  "https://user:pw@agents.example.com/a2a", "ftp://agents.example.com", "http://intranet"])
 def test_mirror_upstream_refuses_internal_targets(url):
     with pytest.raises(am.DeploymentError):
@@ -381,8 +385,9 @@ class FakeCoreApps:
     def read_namespaced_secret(self, name, ns):
         if name not in self.secrets:
             raise _404()
-        data, labels = self.secrets[name]
-        return client.V1Secret(metadata=client.V1ObjectMeta(name=name, labels=labels),
+        data, labels, *annotations = self.secrets[name]
+        return client.V1Secret(metadata=client.V1ObjectMeta(name=name, labels=labels,
+                                                            annotations=annotations[0] if annotations else None),
                                data={k: base64.b64encode(v.encode()).decode() for k, v in data.items()})
 
     def __getattr__(self, attr):  # read/create/patch_namespaced_{config_map,service,deployment}
@@ -487,8 +492,8 @@ def test_keep_on_card_delete_opts_out(monkeypatch):
 
 
 def _mirror_meta(reg, name="A", extra=None):
-    return {"name": sync.object_name(reg, "acme", name), "annotations": {**sync.annotations_for(reg, "acme", name),
-                                                                         **(extra or {})}}
+    return {"name": sync.object_name(reg, "acme", name), "ownerReferences": [{"kind": "Component", "uid": reg.uid}],
+            "annotations": {**sync.annotations_for(reg, "acme", name), **(extra or {})}}
 
 
 def test_release_deletes_the_card_or_holds_on_refusal(monkeypatch):
@@ -505,6 +510,21 @@ def test_release_deletes_the_card_or_holds_on_refusal(monkeypatch):
     assert registry.cards == []
 
 
+def test_release_ignores_forged_labels_and_annotations(monkeypatch):
+    mine = card("Sample", owner="components/sample-agent-sampleagent-a2tagent/api-uid")
+    registry = FakeRegistry([(card("A"), "published"), (mine, "published")])
+    apis, _, _, reg = world(monkeypatch, registry)
+    # someone labels their own Component origin=registry and points its annotations at a card, then deletes it
+    forged = {**_mirror_meta(reg), "name": "any-component"}
+    assert io.release(apis, forged, NS, CR) == "not made from this registry"
+    assert io.release(apis, {**_mirror_meta(reg), "ownerReferences": []}, NS, CR) == "not made from this registry"
+    other_ns = _mirror_meta(reg)
+    other_ns["annotations"][sync.A_SOURCE] = f"elsewhere/{MANAGED}"
+    assert io.release(apis, other_ns, NS, CR) == "no source"
+    assert io.release(apis, _mirror_meta(reg, "Sample"), NS, CR) == "card published from Kubernetes"
+    assert not any(m == "DELETE" for m, _, _ in registry.calls)
+
+
 def test_release_passes_when_the_registry_is_gone(monkeypatch):
     apis, custom, _, reg = world(monkeypatch, FakeRegistry([(card("A"), "published")]))
     del custom.objs[("Component", MANAGED)]
@@ -518,10 +538,16 @@ def test_foreign_credentials_secret_must_be_labelled(monkeypatch):
     core.secrets["openan-operator-token"] = ({"token": "writer"}, {"app.kubernetes.io/managed-by": "openan-operator"})
     with pytest.raises(SourceUnavailable):
         io.credentials(apis, reg, CR)                                     # no exfiltration of the operator token
-    core.secrets["partner-creds"] = ({"token": "w", "readToken": "r"}, {io.CREDENTIALS_LABEL: "true"})
+    core.secrets["partner-creds"] = ({"token": "w", "readToken": "r"}, {io.CREDENTIALS_LABEL: "true"},
+                                     {sync.A_FOR_REGISTRY: "partner"})
     reg = sync.discover(registry_component(name="partner", annotations={sync.A_CREDENTIALS: "partner-creds"}),
                         MANAGED, True, True)
     assert io.credentials(apis, reg, CR) == ("r", "w")
+    # a fake registry Component naming the partner's Secret does not get its tokens
+    fake = sync.discover(registry_component(name="fake", annotations={sync.A_CREDENTIALS: "partner-creds"}),
+                         MANAGED, True, True)
+    with pytest.raises(SourceUnavailable):
+        io.credentials(apis, fake, CR)
 
 
 # ---- handlers -----------------------------------------------------------------------------------------------------

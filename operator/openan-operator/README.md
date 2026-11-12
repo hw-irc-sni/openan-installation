@@ -127,9 +127,11 @@ Registries in other namespaces are not discovered.
   registry API is served by a small reverse proxy to the external URL (example:
   `oda_canvas/manifests/openan/connected-registry.yaml.tpl`). Annotations on that Component:
   `openan.dev/credentials-secret` (Secret with `token` and optional `readToken`, labelled
-  `openan.dev/registry-credentials=true`; the operator refuses its own Secrets), `openan.dev/agent-publish: "true"`
-  (publish Kubernetes-made cards there; needs `cardSync.signing.jku`, an HTTPS key URL that registry trusts),
-  `openan.dev/agent-deploy: "true"` (let its cards run images, see below).
+  `openan.dev/registry-credentials=true` and annotated `openan.dev/registry-component: <that Component's name>`, so
+  a Secret is only ever sent to its own registry; the operator refuses its own Secrets) and
+  `openan.dev/agent-publish: "true"` (publish Kubernetes-made cards there; needs `cardSync.signing.jku`, an HTTPS key
+  URL that registry trusts). Whether its cards may run images is operator configuration, not an annotation:
+  `AGENT_DEPLOY_REGISTRIES` (comma-separated registry Component names).
 
 **Registry -> Kubernetes.** Every 15 s the operator reads the change feed (`/changes`) and, when something changed or
 every `AGENT_SYNC_RESYNC_SECONDS` (300), the complete card list. Each *published* card that was not published from
@@ -138,14 +140,16 @@ the registry Component, so it goes when the registry goes):
 
 - **deploy**: the card carries the signed extension `https://openan.dev/extensions/deployment` with
   `{"v": 1, "image": "<allowed prefix>...:<tag>", "port": 8080, "path": "/a2a", "health": "/healthz", "replicas": 1}`
-  (no env, command or volumes). Only for the CR's own registry with signing on, or a registry annotated
-  `openan.dev/agent-deploy: "true"`; the image must match `ALLOWED_IMAGE_PREFIXES`. The agent gets
+  (no env, command or volumes). Only for the CR's own registry with signing on, or a registry listed in
+  `AGENT_DEPLOY_REGISTRIES`; the image must match `ALLOWED_IMAGE_PREFIXES`. The agent gets
   `A2A_RPC_PATHS=<path>,/<component>/a2a`, because the Canvas gateway forwards `/<component>/a2a` unchanged.
 - **mirror**, otherwise: an nginx proxy (`AGENT_PROXY_IMAGE`, default `nginxinc/nginx-unprivileged:1.27-alpine`, pinned;
   it is operator configuration, not checked against the card image allow-list) forwards `/<component>/a2a` to the
   card's first interface URL. It resolves the host per request and is ready on its own `/healthz`, so a remote outage
   does not make the Component fail. Cluster-internal, private and link-local targets are refused unless listed in
-  `AGENT_UPSTREAM_ALLOWED_HOSTS` (comma-separated host suffixes; when set, only those hosts are allowed).
+  `AGENT_UPSTREAM_ALLOWED_HOSTS` (comma-separated host suffixes; when set, only those hosts are allowed). The check is
+  on the URL: a public name that *resolves* to an internal address is not caught, so production should set
+  `AGENT_UPSTREAM_ALLOWED_HOSTS` and/or an egress NetworkPolicy for pods labelled `openan.dev/origin=registry`.
 
 A card that is deleted, unpublished, rejected or deprecated removes its Component. A pass that would remove more than
 half of a registry's Components (at least 5) is held until the next pass asks for the same removals.
@@ -158,7 +162,7 @@ registry are never published back.
 | Deleted | Effect |
 |---|---|
 | card of a registry-made Component | Component (and its Deployment, Service, ConfigMap) deleted |
-| registry-made Component (by a user) | card deleted in its registry first; if the registry refuses (card owned by another identity, read-only TMF639 registry) the Component stays `Terminating` with a warning and is retried every 60 s until the card is gone. Escape hatch: annotate it `openan.dev/operator-delete: "true"` |
+| registry-made Component (by a user) | card deleted in its registry first; if the registry refuses (card owned by another identity, read-only TMF639 registry) the Component stays `Terminating` with a warning and is retried every 60 s until the card is gone. Escape hatch: annotate it `openan.dev/operator-delete: "true"`. Only a Component owned by that registry Component and named after the card is acted on (labels and annotations alone are not trusted), and a card published from Kubernetes is never deleted this way |
 | card of a Kubernetes-made Component | the Component is deleted, on an `AGENT_DEREGISTERED` event for a card its ExposedAPI had published and that is gone from the complete list (a review state change does not count). Opt out with `openan.dev/keep-on-card-delete: "true"` on the Component. Helm-installed agents come back on the next `helm upgrade`. Events from while the operator was down are not replayed; the card is then republished instead |
 | Kubernetes-made Component | card deleted (existing card sync) |
 | registry Component | its registry-made Components are garbage-collected; cards are left alone |

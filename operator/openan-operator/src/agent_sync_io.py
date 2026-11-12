@@ -41,6 +41,7 @@ class Settings:
     image_prefixes: Tuple[str, ...]
     proxy_image: str
     upstream_suffixes: Tuple[str, ...] = ()
+    deploy_registries: Tuple[str, ...] = ()
     resync_seconds: int = 300
     tmf639_seconds: int = 60
 
@@ -87,16 +88,18 @@ def managed_context(cr: Optional[Dict[str, Any]]) -> Tuple[Optional[str], bool, 
             bool((card.get("signing") or {}).get("enabled", True)), bool(card.get("enabled", True)))
 
 
-def discover_registries(apis: Apis, namespace: str, cr: Optional[Dict[str, Any]]) -> List[sync.RegistryRef]:
+def discover_registries(apis: Apis, namespace: str, cr: Optional[Dict[str, Any]],
+                        deploy_registries: Tuple[str, ...] = ()) -> List[sync.RegistryRef]:
     managed, signing, publish = managed_context(cr)
     items = apis.custom().list_namespaced_custom_object(ODA, "v1", namespace, "components")["items"]
-    return [r for r in (sync.discover(c, managed, signing, publish) for c in items) if r is not None]
+    return [r for r in (sync.discover(c, managed, signing, publish, deploy_registries) for c in items) if r is not None]
 
 
 def credentials(apis: Apis, reg: sync.RegistryRef, cr: Optional[Dict[str, Any]]) -> Tuple[str, Optional[str]]:
     """(reader token, writer token). The CR's own registry uses the operator's generated tokens; any other registry
-    a Secret named on its Component, which must be labelled for this use and must not be one of the operator's own:
-    otherwise whoever can annotate a Component could send the operator's tokens to a URL of their choice."""
+    a Secret named on its Component, which must be labelled for this use, must name that very registry Component
+    and must not be one of the operator's own: otherwise whoever can create or annotate a Component could send the
+    operator's, or another registry's, tokens to a Service of their choice."""
     from .stack import secret_name
     core = apis.core()
     if reg.managed:
@@ -112,8 +115,12 @@ def credentials(apis: Apis, reg: sync.RegistryRef, cr: Optional[Dict[str, Any]])
         raise SourceUnavailable(f"registry {reg.id} has no {sync.A_CREDENTIALS} annotation")
     sec = _get(core.read_namespaced_secret, reg.credentials_secret, reg.namespace)
     labels = (sec.metadata.labels or {}) if sec is not None else {}
+    bound = ((sec.metadata.annotations or {}) if sec is not None else {}).get(sync.A_FOR_REGISTRY)
     if sec is None or labels.get(CREDENTIALS_LABEL) != "true" or labels.get(sync.MANAGED_BY[0]) == sync.MANAGED_BY[1]:
         raise SourceUnavailable(f"Secret {reg.credentials_secret} is missing or not labelled {CREDENTIALS_LABEL}=true")
+    if bound != reg.component:
+        raise SourceUnavailable(f"Secret {reg.credentials_secret} is not for registry {reg.component} "
+                                f"(annotation {sync.A_FOR_REGISTRY}={bound!r})")
     data = sec.data or {}
     writer = decode_secret(data, "token") if "token" in data else None
     reader = decode_secret(data, "readToken") if "readToken" in data else writer
@@ -299,17 +306,24 @@ def release(apis: Apis, meta: Dict[str, Any], namespace: str, cr: Optional[Dict[
         return "operator-initiated"
     source_ns, _, source_name = (ann.get(sync.A_SOURCE) or "").partition("/")
     org, _, agent = (ann.get(sync.A_CARD_KEY) or "").partition("/")
-    if not source_name or not org or not agent or cr is None:
+    if not source_name or not org or not agent or cr is None or source_ns != namespace:
         return "no source"
-    comp = _get(apis.custom().get_namespaced_custom_object, ODA, "v1", source_ns or namespace, "components", source_name)
+    comp = _get(apis.custom().get_namespaced_custom_object, ODA, "v1", namespace, "components", source_name)
     managed, signing, publish = managed_context(cr)
     reg = sync.discover(comp, managed, signing, publish) if comp else None
     if reg is None:
         return "registry gone"
+    # Labels and annotations are editable: only act for an object this operator made from this very card,
+    # i.e. owned by that registry Component and named after the card key.
+    owned = any(r.get("uid") == reg.uid for r in meta.get("ownerReferences") or [])
+    if not owned or sync.object_name(reg, org, agent) != meta.get("name"):
+        return "not made from this registry"
     reader, writer = credentials(apis, reg, cr)
-    present = {sync.card_key(c) for c, _ in source_for(reg, reader).list_agents()}
-    if (org, agent) not in present:
+    found = next((c for c, _ in source_for(reg, reader).list_agents() if sync.card_key(c) == (org, agent)), None)
+    if found is None:
         return "card absent"
+    if sync.is_operator_card(found):  # published from a cluster, never mirrored: not this Component's card
+        return "card published from Kubernetes"
     if reg.flavour != "native" or not writer:
         raise DeleteRefused(f"registry {reg.id} is read-only for the operator: delete {org}/{agent} there first")
     try:

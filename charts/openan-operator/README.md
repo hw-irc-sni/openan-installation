@@ -37,7 +37,7 @@ helm install openan-operator openan/openan-operator -n canvas
 | `deployment.monitoredNamespaces` | `components,odacompns-*` | Namespaces watched (kopf `-n` flags) |
 | `deployment.command` / `args` | kopf run | Container entrypoint |
 | `tmf.operatorId` / `operatorName` | empty | Adds `oda.tmforum.org/operatorId` / `operatorName` labels (badge in canvas-portal-v2) |
-| `configmap.extra` | `{}` | Extra environment variables, e.g. the CR policy lists `ALLOWED_IMAGE_PREFIXES`, `ALLOWED_SPEC_URL_PREFIXES`, `ALLOWED_CALLBACK_HOSTS` and `ALLOWED_CALLBACK_CA_CONFIGMAPS`, and the agent sync settings `AGENT_PROXY_IMAGE`, `AGENT_UPSTREAM_ALLOWED_HOSTS`, `AGENT_SYNC_RESYNC_SECONDS` (see `operator/openan-operator/README.md`) |
+| `configmap.extra` | `{}` | Extra environment variables, e.g. the CR policy lists `ALLOWED_IMAGE_PREFIXES`, `ALLOWED_SPEC_URL_PREFIXES`, `ALLOWED_CALLBACK_HOSTS` and `ALLOWED_CALLBACK_CA_CONFIGMAPS`, and the agent sync settings `AGENT_PROXY_IMAGE`, `AGENT_UPSTREAM_ALLOWED_HOSTS`, `AGENT_DEPLOY_REGISTRIES`, `AGENT_SYNC_RESYNC_SECONDS` (see `operator/openan-operator/README.md`) |
 | `global.image.registry` | empty | Private registry prefix (with trailing `/`) |
 | `global.imagePullSecrets` | `[]` | Image pull secrets |
 

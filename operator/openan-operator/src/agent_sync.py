@@ -30,7 +30,8 @@ A_OP_DELETE = "openan.dev/operator-delete"        # set before every operator-in
 # Annotations on registry Components (set by whoever installs a connected registry's proxy Component).
 A_CREDENTIALS = "openan.dev/credentials-secret"
 A_PUBLISH = "openan.dev/agent-publish"
-A_DEPLOY = "openan.dev/agent-deploy"
+# On the credentials Secret: the registry Component it belongs to (a Secret is only sent to that registry).
+A_FOR_REGISTRY = "openan.dev/registry-component"
 # Annotations on Kubernetes-made agents.
 A_KEEP = "openan.dev/keep-on-card-delete"         # on the Component: do not delete it when its card is deleted
 REGISTERED_CARDS = "openan.dev/registered-cards"  # on the ExposedAPI: {"<registry id>": "<org>/<name>"} (non-managed)
@@ -113,7 +114,10 @@ def registry_flavour(component: Dict[str, Any]) -> Optional[Tuple[str, Dict[str,
 
 
 def discover(component: Dict[str, Any], managed_name: Optional[str], managed_signing: bool,
-             managed_publish: bool) -> Optional[RegistryRef]:
+             managed_publish: bool, deploy_registries: Tuple[str, ...] = ()) -> Optional[RegistryRef]:
+    """`deploy_registries`: names of non-managed registry Components whose cards may run images. Operator
+    configuration (AGENT_DEPLOY_REGISTRIES), never an annotation: whoever can annotate a Component must not be able
+    to let a registry start workloads."""
     md = component.get("metadata") or {}
     if md.get("deletionTimestamp") or (md.get("labels") or {}).get(ORIGIN_LABEL) == ORIGIN_REGISTRY:
         return None
@@ -130,7 +134,7 @@ def discover(component: Dict[str, Any], managed_name: Optional[str], managed_sig
         namespace=ns, component=md.get("name", ""), uid=md.get("uid", ""), flavour=flavour,
         base_url=f"http://{impl}.{ns}.svc.cluster.local:{port}", managed=managed,
         publish=flavour == "native" and (managed_publish if managed else _true(ann.get(A_PUBLISH))),
-        deploy_allowed=managed_signing if managed else _true(ann.get(A_DEPLOY)),
+        deploy_allowed=managed_signing if managed else md.get("name") in deploy_registries,
         credentials_secret=None if managed else ann.get(A_CREDENTIALS))
 
 
