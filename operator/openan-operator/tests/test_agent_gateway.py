@@ -70,6 +70,14 @@ def test_bad_implementation_or_port_is_reported_not_routed(impl, port):
     assert routes == [] and len(warnings) == 1
 
 
+def test_apis_with_canvas_gateway_policies_get_no_route():
+    api = exposed("a-a2a", "a")
+    api["spec"]["gatewayConfiguration"] = {"apiKeyVerification": {"enabled": True, "location": "header"}}
+    routes, warnings = gr.desired_routes(TARGET, NS, [api], {"a": component("a")})
+    assert routes == [] and "gatewayConfiguration" in warnings[0]
+    assert gr.unroutable("a-a2a", api["spec"])                           # and its card keeps its own URL
+
+
 def test_merge_keeps_foreign_routes_in_order_and_replaces_only_this_namespaces_routes():
     other_ns = {"name": "openan.components-x.agent", "matches": [{"path": {"pathPrefix": "/agents/components-x/a"}}]}
     stale = {"name": "openan.components.removed", "matches": [{"path": {"pathPrefix": "/agents/components/removed"}}]}

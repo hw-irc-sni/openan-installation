@@ -72,7 +72,11 @@ def _path_prefixes(route: Dict[str, Any]) -> List[str]:
 
 
 def unroutable(name: str, spec: Dict[str, Any]) -> Optional[str]:
-    """Why an a2a ExposedAPI gets no route (None: it gets one)."""
+    """Why an a2a ExposedAPI gets no route (None: it gets one). An ExposedAPI with a gatewayConfiguration (API key
+    verification, rate limits, ...) gets none: the route would not carry those Canvas gateway policies, so it fails
+    closed instead of offering an unprotected way in."""
+    if spec.get("gatewayConfiguration"):
+        return "has a gatewayConfiguration the agentgateway route would not enforce"
     impl, port = spec.get("implementation"), spec.get("port")
     if not _DNS_LABEL.match(name or "") or not isinstance(impl, str) or not _DNS_LABEL.match(impl):
         return "name or implementation is not a DNS label"

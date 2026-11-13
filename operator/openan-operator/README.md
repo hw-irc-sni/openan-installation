@@ -255,7 +255,8 @@ gateway's rewrite leads to the proxy, not straight to the external URL.
 for reading only (the admin port is loopback-only). Every 15 s the operator:
 
 1. lists the namespace's a2a ExposedAPIs and their Components (an ExposedAPI of a missing or terminating Component,
-   or one whose implementation is not a DNS label, gets no route);
+   one whose implementation is not a DNS label, or one with a `gatewayConfiguration` (API key
+   verification, rate limits: policies the route would not enforce) gets no route);
 2. reads the file and replaces only the routes named `openan.<namespace>.*` in the top-level `routes` list. Everything
    else (models, MCP targets, routes from Helm or the Canvas Portal, other namespaces' routes) stays as it is. A route whose path, or a path below it,
    is served by another route is left out with a warning (the gateway picks the longest prefix);
