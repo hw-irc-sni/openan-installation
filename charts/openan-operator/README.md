@@ -37,9 +37,19 @@ helm install openan-operator openan/openan-operator -n canvas
 | `deployment.monitoredNamespaces` | `components,odacompns-*` | Namespaces watched (kopf `-n` flags) |
 | `deployment.command` / `args` | kopf run | Container entrypoint |
 | `tmf.operatorId` / `operatorName` | empty | Adds `oda.tmforum.org/operatorId` / `operatorName` labels (badge in canvas-portal-v2) |
-| `configmap.extra` | `{}` | Extra environment variables, e.g. the CR policy lists `ALLOWED_IMAGE_PREFIXES`, `ALLOWED_SPEC_URL_PREFIXES`, `ALLOWED_CALLBACK_HOSTS` and `ALLOWED_CALLBACK_CA_CONFIGMAPS`, and the agent sync settings `AGENT_PROXY_IMAGE`, `AGENT_UPSTREAM_ALLOWED_HOSTS`, `AGENT_DEPLOY_REGISTRIES`, `AGENT_SYNC_RESYNC_SECONDS`, `AGENT_SYNC_TMF639_SECONDS` (see `operator/openan-operator/README.md`) |
+| `configmap.extra` | `{}` | Extra environment variables, e.g. the CR policy lists `ALLOWED_IMAGE_PREFIXES`, `ALLOWED_SPEC_URL_PREFIXES`, `ALLOWED_CALLBACK_HOSTS` and `ALLOWED_CALLBACK_CA_CONFIGMAPS`, and the agent sync settings `AGENT_PROXY_IMAGE`, `AGENT_UPSTREAM_ALLOWED_HOSTS`, `AGENT_DEPLOY_REGISTRIES`, `AGENT_SYNC_RESYNC_SECONDS`, `AGENT_SYNC_TMF639_SECONDS` (see `operator/openan-operator/README.md`). The `AGENTGATEWAY_*` settings come from `agentGateway.*`, not from here |
+| `agentGateway.enabled` / `namespace` / `configMap` / `keySecret` / `configUrl` / `gateway` / `pathPrefix` | off / `canvas` / `agentgateway-config` / `agentgateway-portal-key` / derived / `default` / `/agents` | A2A routes in agentgateway for every a2a ExposedAPI; adds a Role in `namespace` limited to that ConfigMap (`get`, `patch`) and Secret (`get`) (see `operator/openan-operator/README.md`, "Agent gateway routes") |
+| `agentGateway.publishUrl` | empty | Only when set: cards published to registries advertise the agent's gateway route under this base URL instead of the agent's own URL |
 | `global.image.registry` | empty | Private registry prefix (with trailing `/`) |
 | `global.imagePullSecrets` | `[]` | Image pull secrets |
+
+Agent routes in agentgateway (and, optionally, cards that advertise them):
+
+```bash
+helm upgrade --install openan-operator ./charts/openan-operator -n canvas \
+  --set agentGateway.enabled=true --set-string agentGateway.namespace=canvas \
+  --set-string agentGateway.publishUrl=http://agentgateway.canvas.svc.cluster.local   # optional, off when empty
+```
 
 The release namespace is always `{{ .Release.Namespace }}`; nothing is hardcoded.
 

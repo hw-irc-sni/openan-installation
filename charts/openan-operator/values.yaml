@@ -36,6 +36,23 @@ configmap:
   #   AGENT_SYNC_RESYNC_SECONDS: "300"                                 # full list at least this often
   #   AGENT_SYNC_TMF639_SECONDS: "60"                                  # poll interval of TMF639-only registries
 
+# A2A routes in agentgateway (standalone, config file in a ConfigMap): one route per a2a ExposedAPI of every
+# namespace with a Ready OpenAN CR (spec.agentGateway.enabled, default true), path <pathPrefix>/<namespace>/<ExposedAPI>.
+# The operator writes only routes named openan.<namespace>.* in the ConfigMap's config.yaml and reads the reload
+# status on port 8081 with the key in keySecret. Renders the AGENTGATEWAY_* settings and a Role in `namespace`
+# limited to that ConfigMap and Secret.
+agentGateway:
+  enabled: false
+  namespace: canvas
+  configMap: agentgateway-config
+  keySecret: agentgateway-portal-key
+  configUrl: ""          # default http://agentgateway.<namespace>.svc.cluster.local:8081
+  gateway: default       # `gateways:` of the routes (the agentgateway chart's listener)
+  pathPrefix: /agents
+  # Base URL of the gateway's traffic port (e.g. http://agentgateway.canvas.svc.cluster.local). Empty (default): cards
+  # published to registries keep the agent's own URL. Set: they advertise the agent's gateway route instead.
+  publishUrl: ""
+
 serviceAccount:
   create: true
   name: ""

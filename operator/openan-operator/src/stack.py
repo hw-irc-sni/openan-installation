@@ -223,8 +223,9 @@ def agent_sync_enabled(spec: Dict[str, Any]) -> bool:
 
 
 def pick_cr(items, feature: str = "cardSync"):
-    """The OpenAN CR that card sync (or agent sync) talks to: oldest first, and only one that reconciled to Ready,
-    so a rejected or half-installed second CR in the namespace can never become the sync target."""
-    default = feature == "cardSync"
+    """The OpenAN CR that card sync (or agent sync, or the gateway route sync) talks to: oldest first, and only one
+    that reconciled to Ready, so a rejected or half-installed second CR in the namespace can never become the sync
+    target."""
+    default = feature in ("cardSync", "agentGateway")
     usable = [i for i in items if is_cr_ready(i) and i.get("spec", {}).get(feature, {}).get("enabled", default)]
     return min(usable, key=lambda i: i["metadata"].get("creationTimestamp", ""), default=None)

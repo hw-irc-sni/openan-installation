@@ -2,7 +2,7 @@
 # All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 """OpenAN operator: OpenAN CR lifecycle (Helm-managed ODA Components) + a2a ExposedAPI -> Registry cards
-+ agent registries -> Agent ODA Components (agent sync)."""
++ agent registries -> Agent ODA Components (agent sync) + a2a ExposedAPIs -> agentgateway routes."""
 import base64
 import hashlib
 import json
@@ -15,7 +15,7 @@ import httpx
 import kopf
 from kubernetes import client, config
 
-from . import agent_sync, agent_sync_io, helm_driver, metrics, stack
+from . import agent_sync, agent_sync_io, gateway_io, gateway_routes, helm_driver, metrics, stack
 from .card_signer import public_jwk
 from .cards import ANNOTATION, OwnershipError, allowed_hosts, build_signed_card, card_owner, owner_ref, candidate_urls, decode_secret, fetch_card, is_a2a, trust_document
 from .card_mapper import CardError
@@ -349,7 +349,8 @@ def sync_card(spec, name, namespace, meta, status, patch, logger, **_):
         raw = fetch_card(candidate_urls(spec, namespace))
         me = owner_ref(namespace, name, meta["uid"])
         gateway = [(status or {}).get("apiStatus", {}).get("url", "")]
-        card = build_signed_card(raw, org, signing, owner=me, hosts=allowed_hosts(spec, namespace, gateway))
+        card = build_signed_card(raw, org, signing, owner=me, hosts=allowed_hosts(spec, namespace, gateway),
+                                 rewrite=_gateway_card_rewrite(spec, name, namespace, logger))
         # upsert repeats this check; it is done first so a foreign card's name never gets our key in the trust store
         existing = rc.get(org, card["name"])
         if existing is not None and card_owner(existing) != me:
@@ -516,3 +517,86 @@ def release_agent(name, namespace, meta, logger, **_):
         raise kopf.TemporaryError(f"cannot check the card of {name}: {e}", delay=30)
     metrics.AGENT_SYNC.labels("release", "ok").inc()
     logger.info(f"agent {name} released ({outcome})")
+
+
+# ---- agentgateway: an A2A route per a2a ExposedAPI ------------------------------------------------------------
+
+def gateway_target() -> Optional[gateway_routes.GatewayTarget]:
+    """Operator configuration (chart value agentGateway.*); None when no gateway is configured."""
+    ns = os.environ.get("AGENTGATEWAY_NAMESPACE", "").strip()
+    if not ns:
+        return None
+    prefix = os.environ.get("AGENTGATEWAY_PATH_PREFIX", "/agents").strip().rstrip("/")
+    if not gateway_routes.valid_prefix(prefix):
+        raise kopf.PermanentError(f"AGENTGATEWAY_PATH_PREFIX {prefix!r} must be an absolute path like /agents")
+    return gateway_routes.GatewayTarget(
+        namespace=ns, config_map=os.environ.get("AGENTGATEWAY_CONFIG_MAP", "agentgateway-config"),
+        key_secret=os.environ.get("AGENTGATEWAY_KEY_SECRET", "agentgateway-portal-key"),
+        config_url=(os.environ.get("AGENTGATEWAY_CONFIG_URL", "").strip()
+                    or f"http://agentgateway.{ns}.svc.cluster.local:8081").rstrip("/"),
+        gateway=os.environ.get("AGENTGATEWAY_GATEWAY", "default"), path_prefix=prefix)
+
+
+def publish_url() -> Optional[str]:
+    """AGENTGATEWAY_PUBLISH_URL: base URL of the gateway's traffic port as agents should call it. Empty (default):
+    cards keep the agent's own URL."""
+    value = os.environ.get("AGENTGATEWAY_PUBLISH_URL", "").strip()
+    if not value:
+        return None
+    if not gateway_routes.valid_publish_url(value):
+        raise kopf.PermanentError(f"AGENTGATEWAY_PUBLISH_URL {value!r} must be http(s)://host[:port][/path]")
+    return value
+
+
+def _gateway_card_rewrite(spec, name, namespace, logger):
+    """Card rewrite to the agent's gateway route, only when AGENTGATEWAY_PUBLISH_URL is set and the route exists
+    for this ExposedAPI (gateway configured, route sync on for the namespace, ExposedAPI routable)."""
+    base, target = publish_url(), gateway_target()
+    if base is None or target is None:
+        return None
+    items = _custom().list_namespaced_custom_object(OPENAN, "v1alpha1", namespace, "openans")["items"]
+    problem = gateway_routes.unroutable(name, spec)
+    if stack.pick_cr(items, "agentGateway") is None or problem:
+        logger.info(f"agent card keeps the agent's own URL: {problem or 'no gateway routes in this namespace'}")
+        return None
+    hosts = allowed_hosts(spec, namespace, [])
+    return lambda card: gateway_routes.via_gateway(card, hosts, base, target, namespace, name)
+
+
+@kopf.timer(OPENAN, "v1alpha1", "openans", interval=15, initial_delay=25,
+            when=lambda spec, **_: bool(os.environ.get("AGENTGATEWAY_NAMESPACE", "").strip())
+            and (spec.get("agentGateway") or {}).get("enabled", True))
+def agent_gateway_timer(name, namespace, logger, **_):
+    """Keeps the gateway's openan.<namespace>.* routes equal to the a2a ExposedAPIs of the namespace: agents made in
+    Kubernetes, deployed from a registry card or mirroring an external agent alike. Never fails the CR: the gateway
+    is optional, so a missing or unreadable gateway is reported once per outage."""
+    items = _custom().list_namespaced_custom_object(OPENAN, "v1alpha1", namespace, "openans")["items"]
+    cr = stack.pick_cr(items, "agentGateway")
+    target = gateway_target()
+    if cr is None or cr["metadata"]["name"] != name or target is None:
+        return
+    st = gateway_io.state_for(namespace)
+    try:
+        res = gateway_io.sync_routes(_core(), _custom(), namespace, target)
+    except gateway_io.GatewayUnavailable as e:
+        metrics.GATEWAY_ROUTES.labels("read", "unavailable").inc()
+        if not st.down:
+            logger.warning(f"agentgateway not available, no routes written: {e}")
+        st.down = True
+        return
+    except client.ApiException as e:
+        metrics.GATEWAY_ROUTES.labels("write", "kubernetes-error").inc()
+        logger.warning(f"agentgateway routes: Kubernetes API error {e.status}: {e.reason}")
+        return
+    if st.down:
+        logger.info("agentgateway available again")
+        st.down = False
+    if res.changed:
+        metrics.GATEWAY_ROUTES.labels("written", "ok").inc()
+        logger.info(f"agentgateway routes written ({len(res.routes)}): {', '.join(res.routes) or 'none'}")
+    if res.confirmed:
+        logger.info("agentgateway loaded the routes")
+    if res.reverted:
+        metrics.GATEWAY_ROUTES.labels("written", "rejected").inc()
+    for warning in st.new_warnings(res.warnings):
+        logger.warning(warning)

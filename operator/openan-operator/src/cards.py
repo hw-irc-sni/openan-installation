@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """ExposedAPI(a2a) -> signed agent card published in the Registry Center."""
 import base64
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
@@ -81,11 +81,16 @@ def with_owner(card: Dict[str, Any], owner: str) -> Dict[str, Any]:
 
 
 def build_signed_card(raw: Dict[str, Any], organization: str, signing: Optional[Dict[str, str]],
-                      owner: str = "", hosts: Optional[set] = None) -> Dict[str, Any]:
+                      owner: str = "", hosts: Optional[set] = None,
+                      rewrite: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """`rewrite` (the agentgateway route, AGENTGATEWAY_PUBLISH_URL) runs after the endpoint check and before the
+    owner extension and the signature, so the signed card is the one published."""
     # Local-trust-store keys are looked up by file name <agent>.json: names must be file-name safe.
     card = to_registry_card(raw, organization, allow_spaces=not (signing and signing.get("trust_store")))
     if hosts is not None:
         check_interfaces(card, hosts)
+    if rewrite is not None:
+        card = rewrite(card)
     if owner:
         card = with_owner(card, owner)
     if signing:

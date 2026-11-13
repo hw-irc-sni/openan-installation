@@ -133,6 +133,12 @@ OPENAN_SAMPLE_AGENT_IMAGE=openan-sample-a2a-t-agent:0.1.0
 AGENTGATEWAY_SRC=../../../tmforum-oda/oda-canvas-merged-demo
 # The portal's AI Gateways settings (aiGateways.configNamespace, the gateway URLs) assume the gateway runs in the Canvas namespace.
 AGENTGATEWAY_NS=$(CANVAS_NS)
+# The OpenAN operator keeps an A2A route per a2a ExposedAPI of OPENAN_NS in this gateway (`make openan-operator`):
+# /agents/<namespace>/<ExposedAPI> on the gateway. false: no routes and no RBAC in AGENTGATEWAY_NS.
+OPENAN_AGENTGATEWAY_ROUTES=true
+# Empty (default): agent cards in the registries keep the agent's own URL. Set, e.g. to
+# http://agentgateway.$(AGENTGATEWAY_NS).svc.cluster.local: they advertise the gateway route instead.
+OPENAN_AGENTGATEWAY_PUBLISH_URL=
 # Must match charts/agentgateway/values.yaml (agentgateway-standalone.image and testMcpServer.image).
 AGENTGATEWAY_IMAGE=ghcr.io/agentgateway/agentgateway:v1.7.0
 TEST_MCP_SERVER_IMAGE=tmforumodacanvas/test-mcp-server:0.1.1

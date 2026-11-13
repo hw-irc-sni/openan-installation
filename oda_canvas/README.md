@@ -234,12 +234,13 @@ to `HOOK_KUBECTL_TAG`, so, once the image is loaded, the hooks no longer need th
 ## OpenAN operator (optional)
 
 An external kopf operator (`operator/openan-operator`, chart `charts/openan-operator`) manages OpenAN as ODA
-Components and publishes Canvas `a2a` ExposedAPIs as Agent Cards in the Registry Center. See
-`operator/openan-operator/README.md` for the design. It is not part of `make bootstrap-oda-canvas`:
+Components and publishes Canvas `a2a` ExposedAPIs as Agent Cards in the Registry Center. With agent sync it also turns
+registry cards into Agent ODA Components. It keeps an A2A route for every agent in agentgateway (see "Agent routes in the
+gateway" below). See `operator/openan-operator/README.md` for the design. It is not part of `make bootstrap-oda-canvas`:
 
 ```bash
 make openan-operator-image   # build the operator image, pull RC/OC images, kind load them
-make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orchestration Center)
+make openan-operator         # CRD + operator + OpenAN CR (Registry Center, Orchestration Center); agentgateway routes on
 make openan-sample           # Sample-A2A-T-Agent: builds its image (sample-agent/), loads it into kind, deploys it; waits until its card is in the Registry
 make agentgateway            # AI gateway (charts/agentgateway from AGENTGATEWAY_SRC): pulls/builds and loads its images, installs it in canvas
 make openan-portal-route     # portal on the Istio gateway at "/" (last: it is a catch-all route)
@@ -257,6 +258,20 @@ server at `/mcp`, and the Sample-A2A-T-Agent at `/agents/sample-agent`. The char
 `AGENTGATEWAY_SRC` (`config.mk`) points at a checkout that has it, by default `oda-canvas-merged-demo`. Re-running it keeps the
 models and MCP servers changed from the Canvas Portal's AI Gateways page. `make openan-clean` uninstalls it; the
 `agentgateway-llm-keys` Secret stays.
+
+**Agent routes in the gateway.** With `OPENAN_AGENTGATEWAY_ROUTES=true` (default), `make openan-operator` lets the OpenAN
+operator keep one A2A route per a2a ExposedAPI of `OPENAN_NS` in the gateway's live config. This covers agents installed in
+Kubernetes as well as agents from the internal or a connected registry that agent sync turned into Components. Each
+route is at `/agents/<namespace>/<ExposedAPI>`, for example
+`http://agentgateway.canvas.svc.cluster.local/agents/components/sample-agent-sampleagent-a2tagent/.well-known/agent-card.json`
+(the chart's own `/agents/sample-agent` route stays). The operator writes only routes named `openan.<namespace>.*` in
+the `agentgateway-config` ConfigMap: the standalone gateway has no write API, only this file and the read-only port
+8081. A re-run of `make agentgateway` drops them, and the operator adds them back within about 15 s. A route appears
+in the gateway, and on the portal's AI Gateways page, about a minute after the ExposedAPI, once the kubelet has
+updated the file. The cards published to the Registry Center keep the agent's own URL unless
+`OPENAN_AGENTGATEWAY_PUBLISH_URL` is set (e.g. `make openan-operator
+OPENAN_AGENTGATEWAY_PUBLISH_URL=http://agentgateway.canvas.svc.cluster.local`): then they advertise the gateway route.
+Details: `operator/openan-operator/README.md`, "Agent gateway routes".
 
 The portal is wired to it in `portal-values.yaml.tpl` (`backend.aiGateways.*`, `rbac.agentgatewayConfigAccess`, and
 `AGENTGATEWAY_API_KEY`, which `make portal` reads from the `agentgateway-portal-key` Secret). The portal is installed before
@@ -298,6 +313,8 @@ are unaffected.
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENAN_RC_BUILD`, `OPENAN_RC_SRC` | `false`, `../../registry-center` | Build the Registry Center image from source instead of pulling it. Use a non-release `OPENAN_RC_TAG`, for example `src`. `make openan-operator` then restarts the Deployment so the new build runs. |
+| `OPENAN_AGENTGATEWAY_ROUTES` | `true` | Chart value `agentGateway.enabled` of the operator: an A2A route per a2a ExposedAPI of `OPENAN_NS` in the agentgateway of `AGENTGATEWAY_NS` (`/agents/<namespace>/<ExposedAPI>`), plus a Role there limited to `agentgateway-config` and `agentgateway-portal-key`. `false`: neither. |
+| `OPENAN_AGENTGATEWAY_PUBLISH_URL` | empty | Chart value `agentGateway.publishUrl` (operator env `AGENTGATEWAY_PUBLISH_URL`). Only when set, for example to `http://agentgateway.canvas.svc.cluster.local`, do the cards published to the registries advertise the agent's gateway route instead of its own Service URL. Clear it and re-run `make openan-operator` to go back. |
 | `OPENAN_RC_PUBLIC_BASE_URL` | `https://$(INGRESS_ADDRESS)/openan-registry-center-registrycenter` | `registry.publicBaseUrl`, the base of TMF639 `href`s. |
 | `OPENAN_TMF639_ENABLED`, `OPENAN_TMF639_SPEC_URL` | `false`, empty | `tmf639.*` in the OpenAN CR. |
 | `OPENAN_ALLOWED_SPEC_URL_PREFIXES` | empty (operator default: `project-openan/registry-center` raw URLs) | Operator env `ALLOWED_SPEC_URL_PREFIXES`, for example to accept a fork's profile URL. |

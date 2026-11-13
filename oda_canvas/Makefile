@@ -332,6 +332,8 @@ openan-operator:
 	helm upgrade --install openan-operator $(OPENAN_ROOT)/charts/openan-operator -n $(OPENAN_OPERATOR_NS) --create-namespace \
 	  --set deployment.image=$(OPENAN_OPERATOR_IMAGE) --set deployment.version=$(OPENAN_OPERATOR_TAG) \
 	  --set deployment.monitoredNamespaces='$(OPENAN_NS)' \
+	  --set agentGateway.enabled=$(OPENAN_AGENTGATEWAY_ROUTES) --set-string agentGateway.namespace=$(AGENTGATEWAY_NS) \
+	  --set-string agentGateway.publishUrl='$(OPENAN_AGENTGATEWAY_PUBLISH_URL)' \
 	  $(if $(OPENAN_ALLOWED_SPEC_URL_PREFIXES),--set-string 'configmap.extra.ALLOWED_SPEC_URL_PREFIXES=$(subst $(comma),\$(comma),$(OPENAN_ALLOWED_SPEC_URL_PREFIXES))') \
 	  $(if $(OPENAN_BROADCAST_CALLBACK_HOSTS),--set-string 'configmap.extra.ALLOWED_CALLBACK_HOSTS=$(subst $(comma),\$(comma),$(OPENAN_BROADCAST_CALLBACK_HOSTS))') \
 	  $(if $(OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP),--set-string 'configmap.extra.ALLOWED_CALLBACK_CA_CONFIGMAPS=$(OPENAN_BROADCAST_CALLBACK_CA_CONFIGMAP)') \

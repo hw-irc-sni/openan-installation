@@ -51,6 +51,13 @@ spec:
                   Agent ODA Components. Adds a read-only registry credential and restarts the Registry Center once.
                 properties:
                   enabled: {type: boolean, default: false}
+              agentGateway:
+                type: object
+                description: >-
+                  A2A routes in agentgateway for every a2a ExposedAPI of this namespace. Only acts when the operator
+                  is configured with a gateway (chart value agentGateway.enabled); this switch turns it off per CR.
+                properties:
+                  enabled: {type: boolean, default: true}
               retainData: {type: boolean, default: false}
           status:
             type: object

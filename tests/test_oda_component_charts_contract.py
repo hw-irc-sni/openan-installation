@@ -397,6 +397,38 @@ def test_agent_sync_settings_and_annotations_are_documented():
     assert not [k for k in sorted(keys) if k not in readme], "annotations/labels missing from the operator README"
 
 
+
+# ---- agentgateway routes (operator/openan-operator/src/gateway_*.py) ------------------------------------------------
+
+def test_agentgateway_grant_is_off_by_default_and_limited_to_the_gateway_config():
+    if not HELM:
+        pytest.skip("helm not on PATH")
+    assert not [d for d in _operator_docs() if d["metadata"]["name"].endswith("-agentgateway")]
+    out = subprocess.run([HELM, "template", "x", str(ROOT / "charts/openan-operator"), "-n", "canvas",
+                          "--set", "agentGateway.enabled=true", "--set", "agentGateway.namespace=gw"],
+                         capture_output=True, text=True, check=True).stdout
+    docs = [d for d in yaml.safe_load_all(out) if d]
+    role = next(d for d in docs if d["kind"] == "Role" and d["metadata"]["name"].endswith("-agentgateway"))
+    assert role["metadata"]["namespace"] == "gw"
+    assert role["rules"] == [
+        {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["agentgateway-config"], "verbs": ["get", "patch"]},
+        {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["agentgateway-portal-key"], "verbs": ["get"]}]
+    binding = next(d for d in docs if d["kind"] == "RoleBinding" and d["metadata"]["name"].endswith("-agentgateway"))
+    assert binding["metadata"]["namespace"] == "gw" and binding["subjects"][0]["namespace"] == "canvas"
+    data = next(d for d in docs if d["kind"] == "ConfigMap")["data"]
+    assert data["AGENTGATEWAY_NAMESPACE"] == "gw" and data["AGENTGATEWAY_PATH_PREFIX"] == "/agents"
+
+
+def test_agentgateway_settings_are_documented():
+    import re
+    src = (ROOT / "operator" / "openan-operator" / "src" / "openan_operator.py").read_text()
+    readme = (ROOT / "operator" / "openan-operator" / "README.md").read_text()
+    chart = (ROOT / "charts" / "openan-operator" / "templates" / "configMap.yaml").read_text()
+    env = set(re.findall(r'"(AGENTGATEWAY_[A-Z_]+)"', src))
+    assert env, "no AGENTGATEWAY_* settings found"
+    assert not [e for e in sorted(env) if e not in readme], "AGENTGATEWAY_* settings missing from the operator README"
+    assert not [e for e in sorted(env) if e not in chart], "AGENTGATEWAY_* settings not rendered by the chart"
+
 def test_registry_center_credentials_checksum_restarts_the_pod_only_when_set():
     def pod_annotations(settings=None):
         docs = render("openan-registry-center", settings)

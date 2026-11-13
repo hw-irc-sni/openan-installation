@@ -7,6 +7,19 @@ metadata:
     {{- include "openan-operator.labels" . | nindent 4 }}
 data:
   LOGGING: {{ .Values.configmap.loglevel | quote }}
+  {{- with .Values.agentGateway }}
+  {{- if .enabled }}
+  AGENTGATEWAY_NAMESPACE: {{ required "agentGateway.namespace is required" .namespace | quote }}
+  AGENTGATEWAY_CONFIG_MAP: {{ .configMap | quote }}
+  AGENTGATEWAY_KEY_SECRET: {{ .keySecret | quote }}
+  AGENTGATEWAY_CONFIG_URL: {{ .configUrl | quote }}
+  AGENTGATEWAY_GATEWAY: {{ .gateway | quote }}
+  AGENTGATEWAY_PATH_PREFIX: {{ .pathPrefix | quote }}
+  {{- if .publishUrl }}
+  AGENTGATEWAY_PUBLISH_URL: {{ .publishUrl | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
   {{- range $k, $v := .Values.configmap.extra }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}

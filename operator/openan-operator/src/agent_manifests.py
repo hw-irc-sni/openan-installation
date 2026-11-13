@@ -232,11 +232,19 @@ def _deploy_objects(name, card, policy, labels, annotations, child_labels, deplo
             *_workload(name, child_labels, container, deploy["replicas"], port, [])]
 
 
+def served_card(name: str, card: Dict[str, Any], namespace: str) -> Dict[str, Any]:
+    """The card a mirror serves: its first interface (the one proxied) points at the mirror, so clients in the
+    cluster, and agentgateway's A2A card rewrite, reach the agent through the proxy. Other interfaces are kept."""
+    interfaces = [dict(i) if isinstance(i, dict) else i for i in card.get("supportedInterfaces") or []]
+    interfaces[0]["url"] = f"http://{name}.{namespace}.svc.cluster.local:{PROXY_PORT}/{name}/a2a"
+    return {**card, "supportedInterfaces": interfaces}
+
+
 def _mirror_objects(name, card, policy, labels, annotations, child_labels) -> List[Dict[str, Any]]:
     upstream = validate_upstream(primary_url(card), policy.upstream_suffixes)
     config = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": name, "labels": child_labels},
               "data": {"default.conf.template": nginx_conf(name, upstream),
-                       "agent-card.json": json.dumps(card, sort_keys=True)}}
+                       "agent-card.json": json.dumps(served_card(name, card, policy.namespace), sort_keys=True)}}
     container = {
         "name": "proxy", "image": policy.proxy_image,
         "env": [{"name": "NGINX_ENTRYPOINT_LOCAL_RESOLVERS", "value": "1"}],

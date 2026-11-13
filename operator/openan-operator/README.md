@@ -1,7 +1,7 @@
 # OpenAN Operator
 
 A Python/[kopf](https://kopf.readthedocs.io) operator for the [ODA Canvas](https://github.com/tmforum-oda/oda-canvas).
-It lives outside the Canvas repository and has two jobs:
+It lives outside the Canvas repository and has these jobs:
 
 1. **Stack lifecycle** – an `OpenAN` custom resource (`openans.openan.dev/v1alpha1`) installs, upgrades and
    uninstalls the Registry Center, Orchestration Center and frontend. Each is an **ODA Component** with its own
@@ -14,6 +14,9 @@ It lives outside the Canvas repository and has two jobs:
 3. **Agent sync** (opt-in, `spec.agentSync.enabled`) – agent registries found as ODA Components and Agent ODA
    Components are kept in step both ways: registry cards become Components, deletes propagate in both directions
    (see [Agent sync](#agent-sync-agent-registries---agent-oda-components)).
+4. **Agent gateway routes** (opt-in, chart value `agentGateway.enabled`) – every a2a ExposedAPI, whether its agent
+   was made in Kubernetes, deployed from a registry card or mirrors an external agent, gets an A2A route in
+   [agentgateway](https://github.com/agentgateway/agentgateway) (see [Agent gateway routes](#agent-gateway-routes)).
 
 ```mermaid
 sequenceDiagram
@@ -58,6 +61,7 @@ sequenceDiagram
 | `src/cards.py`, `card_mapper.py`, `card_signer.py`, `registry_client.py` | card sync |
 | `src/agent_sync.py`, `agent_manifests.py` | agent sync, pure logic: registry discovery, plans, the rendered Component/Deployment/Service/ConfigMap |
 | `src/agent_sync_io.py`, `registry_source.py` | agent sync, side effects: registry reads (native, TMF639), cluster writes, mirror release |
+| `src/gateway_routes.py`, `gateway_io.py` | agentgateway routes: the wanted routes and how they merge into the config (pure); ConfigMap write, reload check |
 | `crd/openan-crd.yaml` | CRD (copy kept in `charts/openan-operator/crds/`, checked by a contract test) |
 | `Dockerfile` | build with `containerized/build/build-operator.sh` (context = repo root) |
 
@@ -152,7 +156,9 @@ the registry Component, so it goes when the registry goes):
   `A2A_RPC_PATHS=<path>,/<component>/a2a`, because the Canvas gateway forwards `/<component>/a2a` unchanged.
 - **mirror**, otherwise: an nginx proxy (`AGENT_PROXY_IMAGE`, default `nginxinc/nginx-unprivileged:1.27-alpine`, pinned;
   it is operator configuration, not checked against the card image allow-list) forwards `/<component>/a2a` to the
-  card's first interface URL. It resolves the host per request and is ready on its own `/healthz`, so a remote outage
+  card's first interface URL, and serves the card at `/.well-known/agent-card.json` with that interface pointing at
+  itself (`http://<component>.<namespace>.svc.cluster.local:8080/<component>/a2a`; other interfaces unchanged), so
+  in-cluster clients and the agentgateway route go through the proxy. It resolves the host per request and is ready on its own `/healthz`, so a remote outage
   does not make the Component fail. Cluster-internal, private and link-local targets are refused unless listed in
   `AGENT_UPSTREAM_ALLOWED_HOSTS` (comma-separated host suffixes; when set, only those hosts are allowed). The check is
   on the URL: a public name that *resolves* to an internal address is not caught, so production should set
@@ -224,6 +230,69 @@ only seen from events.
 
 Metric `openan_operator_agent_sync_total{action,result}`: `created`/`updated`/`unchanged`/`mirror-deleted`/
 `component-deleted` with `ok`; `read` with `unavailable` or `kubernetes-error`; `release` with `ok` or `refused`.
+
+## Agent gateway routes
+
+Off by default. With the chart value `agentGateway.enabled: true`, the operator keeps one A2A route per a2a
+ExposedAPI in a standalone agentgateway (the Canvas `charts/agentgateway`), for every namespace with a Ready OpenAN CR
+(the oldest one drives it; `spec.agentGateway.enabled: false` on that CR turns it off for its namespace). Agents made
+in Kubernetes, deployed from a registry card and mirrors of external agents all have an a2a ExposedAPI, so the
+registries' agents (internal and connected) reach the gateway through the agent sync above.
+
+| Route field | Value |
+|---|---|
+| `name` | `openan.<namespace>.<ExposedAPI>` |
+| path | `<AGENTGATEWAY_PATH_PREFIX>/<namespace>/<ExposedAPI>` (prefix match) |
+| backend | `<implementation>.<namespace>.svc.cluster.local:<port>` of the ExposedAPI |
+| policies | `a2a` (the gateway rewrites the card's interface URLs to itself), `urlRewrite` prefix `/`, 120 s timeout |
+
+The agent card is then at `<path>/.well-known/agent-card.json` on the gateway. A mirror serves the registry's card with its
+first interface URL pointing at the mirror (`http://<name>.<namespace>.svc.cluster.local:8080/<name>/a2a`), so the
+gateway's rewrite leads to the proxy, not straight to the external URL.
+
+**How it is written.** Standalone agentgateway has no write API: it reads one file, `config.yaml` in the ConfigMap
+`AGENTGATEWAY_CONFIG_MAP`, and reloads it when it changes; its port 8081 serves `/config_dump` and `/api/runtime`
+for reading only (the admin port is loopback-only). Every 15 s the operator:
+
+1. lists the namespace's a2a ExposedAPIs and their Components (an ExposedAPI of a missing or terminating Component,
+   or one whose implementation is not a DNS label, gets no route);
+2. reads the file and replaces only the routes named `openan.<namespace>.*` in the top-level `routes` list. Everything
+   else (models, MCP targets, routes from Helm or the Canvas Portal, other namespaces' routes) stays as it is. A route
+   whose path another route already serves is left out with a warning;
+3. writes it only if it changed, with the `resourceVersion` it read: a concurrent change answers 409 and the next pass
+   starts again from the new file;
+4. checks on the next passes, on port 8081 with the key in `AGENTGATEWAY_KEY_SECRET`, that the gateway loaded the
+   routes. The kubelet takes up to about a minute to update the file in the pod. A file the gateway rejects keeps
+   the old config running but would stop a restarted pod, so it is put back (if nobody wrote after it) and the same
+   routes are not written again until they change. No second write is made while one waits, for at most 180 s.
+
+A route goes when its ExposedAPI goes. `helm upgrade` of the gateway (`make agentgateway`) puts back the chart's
+`routes`; the next pass adds the operator's routes again. A missing ConfigMap is reported once and changes nothing;
+the gateway never affects the card or agent sync. Turning it off (chart value or `spec.agentGateway.enabled: false`) or
+deleting the CR stops the sync and leaves the `openan.<namespace>.*` routes in place; remove them from the ConfigMap
+by hand, or re-run `helm upgrade` of the gateway.
+
+| Setting (operator env; the chart renders them from `agentGateway.*`) | Default | Meaning |
+|---|---|---|
+| `AGENTGATEWAY_NAMESPACE` | empty (off) | namespace of the gateway's ConfigMap and key Secret |
+| `AGENTGATEWAY_CONFIG_MAP` | `agentgateway-config` | ConfigMap with `config.yaml` |
+| `AGENTGATEWAY_KEY_SECRET` | `agentgateway-portal-key` | Secret (`key`) for port 8081 |
+| `AGENTGATEWAY_CONFIG_URL` | `http://agentgateway.<namespace>.svc.cluster.local:8081` | read port |
+| `AGENTGATEWAY_GATEWAY` | `default` | `gateways:` of the routes |
+| `AGENTGATEWAY_PATH_PREFIX` | `/agents` | first path segment(s) of the routes |
+| `AGENTGATEWAY_PUBLISH_URL` | empty (off) | base URL of the gateway's traffic port; when set, published cards advertise the gateway route (below) |
+
+**Cards with the gateway URL (opt-in).** By default the card sync publishes the agent's own URL. Only when
+`AGENTGATEWAY_PUBLISH_URL` is set (and the routes above are on for the namespace and the ExposedAPI gets a route)
+does it replace every interface URL on the agent's own Service with
+`<AGENTGATEWAY_PUBLISH_URL><AGENTGATEWAY_PATH_PREFIX>/<namespace>/<ExposedAPI><original path>`, before signing; this
+applies to the CR's own registry and to connected registries with `openan.dev/agent-publish`. Interfaces on other hosts
+(the Canvas gateway URL) are kept. Cards are republished on the next card sync (on start and every 5 min), so
+setting or clearing it takes effect without other changes.
+
+RBAC: a Role in `AGENTGATEWAY_NAMESPACE` with `get`/`patch` on that one ConfigMap and `get` on that one Secret
+(`resourceNames`). Metric `openan_operator_gateway_routes_total{action,result}`: `written` with `ok` or `rejected`,
+`read` with `unavailable`, `write` with `kubernetes-error`.
 
 ## Develop
 
