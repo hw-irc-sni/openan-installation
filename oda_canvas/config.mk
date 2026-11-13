@@ -127,6 +127,18 @@ OPENAN_LLM_URL=$(OPENAN_LLM_BASE_URL)/chat/completions
 OPENAN_LLM_MODEL=Qwen/Qwen3.8-27B-FP8
 # Sample-A2A-T-Agent image (built from ./sample-agent and loaded into kind)
 OPENAN_SAMPLE_AGENT_IMAGE=openan-sample-a2a-t-agent:0.1.0
+# Connected agent registry (`make connect-registry`, manifests/openan/connected-registry.yaml.tpl): a Registry Center
+# outside the cluster whose published agents the operator's agent sync turns into Agent Components (mirrors) and, with
+# OPENAN_AGENTGATEWAY_ROUTES, agentgateway routes. ORIGIN is scheme://host[:port]; PATH_PREFIX is the path its
+# /rest/v1/registry-center API is served below (empty: at the root). Tokens come from the environment, never from this
+# file: CONNECTED_REGISTRY_READ_TOKEN (nms_oss: full list and change feed) and CONNECTED_REGISTRY_TOKEN (writes: deleting
+# a card when its mirror is deleted). With neither set, a placeholder read token is stored, for registries that serve
+# reads without authentication; deleting a mirror then needs `openan.dev/operator-delete: "true"` on it.
+CONNECTED_REGISTRY_NAME=external-registry
+CONNECTED_REGISTRY_ORIGIN=https://1.92.124.203
+CONNECTED_REGISTRY_HOST=$(word 1,$(subst :, ,$(patsubst https://%,%,$(patsubst http://%,%,$(CONNECTED_REGISTRY_ORIGIN)))))
+CONNECTED_REGISTRY_PATH_PREFIX=/api/registry-center
+OPENAN_AGENT_PROXY_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
 
 # AI gateway (`make agentgateway`, part of `make bootstrap-openan`): charts/agentgateway and the test MCP server it routes to.
 # Not every Canvas branch has the chart, so this is a separate checkout: merged-demo combines ai-gateways and ai-registries.

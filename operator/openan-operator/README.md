@@ -134,7 +134,9 @@ Registries in other namespaces are not discovered.
   the Registry Center once (pod annotation `checksum/credentials`). Writes keep using `openan-operator`.
 - A **connected registry** running outside the cluster is a proxy Component: a Resource Inventory Component whose
   registry API is served by a small reverse proxy to the external URL (example:
-  `oda_canvas/manifests/openan/connected-registry.yaml.tpl`). Annotations on that Component:
+  `oda_canvas/manifests/openan/connected-registry.yaml.tpl`, applied by `make connect-registry` in `oda_canvas/`; a
+  registry whose API sits below a path, e.g. `/api/registry-center`, sets `CONNECTED_REGISTRY_PATH_PREFIX`, which the
+  proxy adds upstream). Annotations on that Component:
   `openan.dev/credentials-secret` (Secret with `token` and optional `readToken`, labelled
   `openan.dev/registry-credentials=true` and annotated `openan.dev/registry-component: <that Component's name>` and
   `openan.dev/registry-endpoint: http://<implementation>.<namespace>.svc.cluster.local:<port>`, so a Secret is only

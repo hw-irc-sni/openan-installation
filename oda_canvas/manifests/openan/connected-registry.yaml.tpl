@@ -3,12 +3,15 @@
 # (spec.agentSync.enabled on the OpenAN CR). The Canvas only marks an API ready from Service endpoints, so the
 # Component is backed by a small nginx reverse proxy to the external registry, not by an ExternalName Service.
 #
-# Render with an explicit variable list (nginx's own ${...} variables must stay). CONNECTED_REGISTRY_ORIGIN is
-# scheme://host[:port] only, no path: nginx passes it to a variable proxy_pass, which would replace every request path.
+# Render with an explicit variable list (nginx's own ${...} variables must stay), or use `make connect-registry`.
+# CONNECTED_REGISTRY_ORIGIN is scheme://host[:port] only, no path: nginx passes it to a variable proxy_pass, which
+# would replace every request path. A registry served below a path (its API at <origin><prefix>/rest/v1/registry-center,
+# e.g. behind an ingress at /api/registry-center) takes that path as CONNECTED_REGISTRY_PATH_PREFIX (empty: at the root):
+# the proxy prepends it, so the operator and the Canvas gateway keep using /rest/v1/registry-center on the proxy.
 #   export CONNECTED_REGISTRY_NAME=partner-registry CONNECTED_REGISTRY_ORIGIN=https://registry.partner.example \
-#          CONNECTED_REGISTRY_HOST=registry.partner.example \
+#          CONNECTED_REGISTRY_HOST=registry.partner.example CONNECTED_REGISTRY_PATH_PREFIX= \
 #          OPENAN_AGENT_PROXY_IMAGE=nginxinc/nginx-unprivileged:1.27-alpine
-#   envsubst '${CONNECTED_REGISTRY_NAME} ${CONNECTED_REGISTRY_ORIGIN} ${CONNECTED_REGISTRY_HOST} ${OPENAN_AGENT_PROXY_IMAGE}' \
+#   envsubst '${CONNECTED_REGISTRY_NAME} ${CONNECTED_REGISTRY_ORIGIN} ${CONNECTED_REGISTRY_HOST} ${CONNECTED_REGISTRY_PATH_PREFIX} ${OPENAN_AGENT_PROXY_IMAGE}' \
 #     < connected-registry.yaml.tpl | kubectl apply -f -
 #
 # Credentials (Bearer tokens issued by that registry): `token` is used for writes (deleting cards when a mirrored
@@ -37,7 +40,9 @@ data:
         resolver ${NGINX_LOCAL_RESOLVERS} valid=30s;
         set $registry_upstream ${CONNECTED_REGISTRY_ORIGIN};
         # Canvas gateway traffic arrives as /<component>/...; in-cluster callers (the operator) use the plain path.
-        rewrite ^/${CONNECTED_REGISTRY_NAME}(/.*)$ $1 break;
+        # Both are sent upstream below the registry's path prefix (query string kept).
+        rewrite ^/${CONNECTED_REGISTRY_NAME}(/.*)$ ${CONNECTED_REGISTRY_PATH_PREFIX}$1 break;
+        rewrite ^(/.*)$ ${CONNECTED_REGISTRY_PATH_PREFIX}$1 break;
         proxy_pass $registry_upstream;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
@@ -113,7 +118,7 @@ spec:
       # Discovery matches the /registry-center.yaml suffix. The Canvas binds dependencies by exact URL and this one
       # differs from the in-cluster Registry Center's, so nothing that depends on that one binds to this proxy.
       specification:
-      - url: ${CONNECTED_REGISTRY_ORIGIN}/registry-center.yaml
+      - url: ${CONNECTED_REGISTRY_ORIGIN}${CONNECTED_REGISTRY_PATH_PREFIX}/registry-center.yaml
       implementation: ${CONNECTED_REGISTRY_NAME}
       path: /${CONNECTED_REGISTRY_NAME}/rest/v1/registry-center
       port: 8080

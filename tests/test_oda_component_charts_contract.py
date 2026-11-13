@@ -437,7 +437,8 @@ def test_registry_center_credentials_checksum_restarts_the_pod_only_when_set():
     assert pod_annotations({"credentialsChecksum": "abc"})["checksum/credentials"] == "abc"
 
 
-def test_connected_registry_example_renders_with_its_documented_variable_list():
+@pytest.mark.parametrize("prefix", ["", "/api/registry-center"])
+def test_connected_registry_example_renders_with_its_documented_variable_list(prefix):
     import re
     tpl = (ROOT / "oda_canvas" / "manifests" / "openan" / "connected-registry.yaml.tpl").read_text()
     listed = re.search(r"envsubst '([^']+)'", tpl).group(1).split()
@@ -445,7 +446,7 @@ def test_connected_registry_example_renders_with_its_documented_variable_list():
     used = set(re.findall(r"\$\{([A-Z_]+)\}", tpl.split("\napiVersion:", 1)[1])) - {"NGINX_LOCAL_RESOLVERS"}
     assert used == set(names), (used, names)
     values = {"CONNECTED_REGISTRY_NAME": "partner", "CONNECTED_REGISTRY_ORIGIN": "https://registry.partner.example",
-              "CONNECTED_REGISTRY_HOST": "registry.partner.example",
+              "CONNECTED_REGISTRY_HOST": "registry.partner.example", "CONNECTED_REGISTRY_PATH_PREFIX": prefix,
               "OPENAN_AGENT_PROXY_IMAGE": "nginxinc/nginx-unprivileged:1.27-alpine"}
     body = tpl
     for name in names:
@@ -459,3 +460,9 @@ def test_connected_registry_example_renders_with_its_documented_variable_list():
     assert api["name"] == "agentregistry" and api["specification"][0]["url"].endswith("/registry-center.yaml")
     assert api["implementation"] == docs[2]["metadata"]["name"] and api["port"] == docs[2]["spec"]["ports"][0]["port"]
     assert all(d["metadata"]["labels"]["oda.tmforum.org/componentName"] == "partner" for d in docs)
+    # The operator and the Canvas gateway call /rest/v1/registry-center on the proxy (the gateway with /partner in
+    # front); both go upstream below the registry's path prefix.
+    conf = docs[0]["data"]["default.conf.template"]
+    assert f"rewrite ^/partner(/.*)$ {prefix}$1 break;" in conf
+    assert f"rewrite ^(/.*)$ {prefix}$1 break;" in conf
+    assert conf.index("rewrite ^/partner") < conf.index("rewrite ^(/.*)$") < conf.index("proxy_pass")

@@ -250,6 +250,8 @@ make bootstrap-openan        # openan-operator-image, openan-operator, openan-sa
                              # openan-port-forward, k8s-dashboard-port-forward
 make openan-clean            # remove everything the openan-* targets, agentgateway and k8s-dashboard created (CR, releases, PVCs, operator, CRD, `openan` Helm repo)
 make csp-knowledge-sample    # optional, after agentgateway: c-kg knowledge-graph MCP server, registered in agentgateway (see below)
+make connect-registry        # optional: connect an external Registry Center (CONNECTED_REGISTRY_* in config.mk; see below)
+make connect-registry-clean  # remove it again (its mirrored agents are garbage-collected with it)
 ```
 
 **AI gateway.** `make agentgateway` installs the Canvas [agentgateway](https://github.com/agentgateway/agentgateway) chart as
@@ -272,6 +274,38 @@ updated the file. The cards published to the Registry Center keep the agent's ow
 `OPENAN_AGENTGATEWAY_PUBLISH_URL` is set (e.g. `make openan-operator
 OPENAN_AGENTGATEWAY_PUBLISH_URL=http://agentgateway.canvas.svc.cluster.local`): then they advertise the gateway route.
 Details: `operator/openan-operator/README.md`, "Agent gateway routes".
+
+**Connected agent registry.** `make connect-registry` connects a Registry Center that runs outside the cluster, so its
+published agents become Agent ODA Components (mirrors) and get agentgateway routes like the local ones. It renders
+`manifests/openan/connected-registry.yaml.tpl` into a Resource Inventory Component named `CONNECTED_REGISTRY_NAME`
+(`external-registry`), backed by an nginx proxy to `CONNECTED_REGISTRY_ORIGIN`. It also creates the Secret
+`<name>-credentials`, bound to that Component and its endpoint, and turns on `spec.agentSync` on the OpenAN CR. Settings
+(`config.mk`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CONNECTED_REGISTRY_ORIGIN` | `https://1.92.124.203` | `scheme://host[:port]` of the registry, no path |
+| `CONNECTED_REGISTRY_PATH_PREFIX` | `/api/registry-center` | path its `/rest/v1/registry-center` API is served below (empty: at the root); the proxy adds it, so the operator and the Canvas gateway keep the standard path |
+| `CONNECTED_REGISTRY_HOST` | host of the origin | `Host` header and TLS server name sent upstream |
+| `OPENAN_AGENT_PROXY_IMAGE` | `nginxinc/nginx-unprivileged:1.27-alpine` | proxy image |
+
+Tokens are read only from the environment, never from `config.mk`: `CONNECTED_REGISTRY_READ_TOKEN` (an `nms_oss`
+credential: full card list and change feed) and `CONNECTED_REGISTRY_TOKEN` (writes). Without either, the placeholder
+read token `anonymous` is stored, which works only for a registry that serves reads without authentication. Without a
+write token the operator cannot delete a card there, so a mirror you delete stays `Terminating` until its card is removed
+in the registry or you annotate the mirror with `openan.dev/operator-delete: "true"`.
+
+```bash
+CONNECTED_REGISTRY_READ_TOKEN=... make connect-registry
+kubectl -n components get components -l openan.dev/origin=registry   # one mirror per published card, within ~15 s
+```
+
+Only cards whose interface URL is a public address are mirrored. Cards that point at `127.0.0.1`, private addresses or
+another cluster's `*.svc.cluster.local` Services are skipped, and the operator logs `not mirrored: agent url host ... is
+cluster-internal or not public` for each one. Such agents are reachable only from where they run: fix their URLs in
+the registry. With the default registry, 3 of its 8 agents (infovista, `51.20.69.3`) are mirrored and routed; the other 5
+point at loopback or remote cluster Services. The Canvas Portal's AI Registries page lists a registry source configured
+in the portal itself, which is independent of the registries the operator syncs.
 
 The portal is wired to it in `portal-values.yaml.tpl` (`backend.aiGateways.*`, `rbac.agentgatewayConfigAccess`, and
 `AGENTGATEWAY_API_KEY`, which `make portal` reads from the `agentgateway-portal-key` Secret). The portal is installed before
