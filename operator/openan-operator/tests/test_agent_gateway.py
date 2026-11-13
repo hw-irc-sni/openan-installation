@@ -84,6 +84,11 @@ def test_merge_never_takes_a_path_another_route_serves():
     wanted, _ = gr.desired_routes(TARGET, NS, [exposed("a-a2a", "a")], {"a": component("a")})
     routes, warnings = gr.merge([taken], wanted, NS)
     assert routes == [taken] and "already served" in warnings[0]
+    nested = {"name": "manual", "matches": [{"path": {"pathPrefix": "/agents/components/a-a2a/a2a"}}]}
+    assert gr.merge([nested], wanted, NS)[0] == [nested]                    # would shadow the agent's RPC path
+    shorter = {"name": "all", "matches": [{"path": {"pathPrefix": "/agents"}}]}
+    sibling = {"name": "s", "matches": [{"path": {"pathPrefix": "/agents/components/a-a2a-other"}}]}
+    assert gr.merge([shorter, sibling], wanted, NS)[0] == [shorter, sibling] + wanted   # longest prefix wins
 
 
 def test_routes_with_a_dollar_are_unsafe():

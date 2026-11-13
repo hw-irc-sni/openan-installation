@@ -257,8 +257,8 @@ for reading only (the admin port is loopback-only). Every 15 s the operator:
 1. lists the namespace's a2a ExposedAPIs and their Components (an ExposedAPI of a missing or terminating Component,
    or one whose implementation is not a DNS label, gets no route);
 2. reads the file and replaces only the routes named `openan.<namespace>.*` in the top-level `routes` list. Everything
-   else (models, MCP targets, routes from Helm or the Canvas Portal, other namespaces' routes) stays as it is. A route
-   whose path another route already serves is left out with a warning;
+   else (models, MCP targets, routes from Helm or the Canvas Portal, other namespaces' routes) stays as it is. A route whose path, or a path below it,
+   is served by another route is left out with a warning (the gateway picks the longest prefix);
 3. writes it only if it changed, with the `resourceVersion` it read: a concurrent change answers 409 and the next pass
    starts again from the new file;
 4. checks on the next passes, on port 8081 with the key in `AGENTGATEWAY_KEY_SECRET`, that the gateway loaded the

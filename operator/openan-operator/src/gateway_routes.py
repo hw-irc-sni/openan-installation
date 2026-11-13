@@ -143,14 +143,15 @@ def desired_routes(target: GatewayTarget, namespace: str, exposedapis: Iterable[
 def merge(current: Optional[List[Any]], wanted: List[Dict[str, Any]], namespace: str
           ) -> Tuple[List[Any], List[str]]:
     """(new `routes` list, warnings): every route this namespace does not own, unchanged and in order, then the
-    wanted ones. A wanted route whose path another route already serves is left out (the other route was there
-    first and is not ours to change)."""
+    wanted ones. A wanted route is left out when another route serves its path or a path below it (the gateway
+    picks the longest prefix, so such a route would take the agent's traffic; it was there first and is not ours
+    to change). Shorter foreign prefixes (/agents) lose to ours and are no clash."""
     current = current if isinstance(current, list) else []
     foreign = [r for r in current if not owned(r, namespace)]
     taken = {p for r in foreign if isinstance(r, dict) for p in _path_prefixes(r)}
     out, warnings = list(foreign), []
     for route in wanted:
-        clash = [p for p in _path_prefixes(route) if p in taken]
+        clash = [t for p in _path_prefixes(route) for t in sorted(taken) if t == p or t.startswith(p + "/")]
         if clash:
             warnings.append(f"gateway route {route['name']}: path {clash[0]} is already served by another route")
             continue
